@@ -210,7 +210,8 @@ swift run Check        # 105 проверок, ALL TESTS PASSED
 swift build -c release # релиз
 
 HOMELAB_CONFIG=/path/config.yaml .build/release/Dashboard
-# по умолчанию: ~/.config/homelab-dashboard/config.yaml
+# по умолчанию (macOS): ~/Library/Application Support/homelab-dashboard/config.yaml
+#  (fallback: ~/.config/homelab-dashboard/config.yaml)
 ```
 
 ---

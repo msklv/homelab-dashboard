@@ -36,7 +36,8 @@ swift build -c release # release build
 
 ```sh
 HOMELAB_CONFIG=/path/config.yaml .build/release/Dashboard
-# по умолчанию: ~/.config/homelab-dashboard/config.yaml
+# по умолчанию (macOS): ~/Library/Application Support/homelab-dashboard/config.yaml
+#  (fallback: ~/.config/homelab-dashboard/config.yaml)
 ```
 
 ## Конфигурация / Configuration

@@ -260,9 +260,7 @@ struct HostCard: View {
         VStack(alignment: .leading, spacing: 7) {
             header(s)
             specsLine(s)
-            Divider()
-            metricStrip(s)
-            tempRow(s)
+            metricsBlock(s)
             tagRow
         }
         .padding(11)
@@ -413,6 +411,17 @@ struct HostCard: View {
                 .background(Color.secondary.opacity(0.08))
                 .clipShape(Capsule())
         }
+    }
+
+    /// Метрики с иконками. Раздельные гейты:
+    /// — CPU/RAM кольца (и Сеть/Диск) — если есть хотя бы CPU или RAM;
+    /// — строка температур — только если собрана хотя бы одна (иначе «— —» шум).
+    @ViewBuilder private func metricsBlock(_ s: HostSnapshot) -> some View {
+        let hasCpuRam = s.cpuPct != nil || s.ramUsedPct != nil
+        let hasTemp = s.tempC != nil || s.tempBoardC != nil
+        if hasCpuRam || hasTemp { Divider() }
+        if hasCpuRam { metricStrip(s) }
+        if hasTemp { tempRow(s) }
     }
 
     private func metricStrip(_ s: HostSnapshot) -> some View {

@@ -130,7 +130,11 @@ public enum ConfigError: Error, LocalizedError {
 }
 
 public extension Config {
-    /// Стандартный путь к конфигу (переопределяется env HOMELAB_CONFIG или аргументом).
+    /// Стандартный путь к конфигу.
+    /// Приоритет: env HOMELAB_CONFIG / аргумент, затем первый существующий из
+    /// `~/Library/Application Support/homelab-dashboard/config.yaml` (каноничный
+    /// macOS) и `~/.config/homelab-dashboard/config.yaml` (legacy); если нет ни
+    /// одного — каноничный путь (Application Support).
     static func defaultPath() -> String {
         if let p = ProcessInfo.processInfo.environment["HOMELAB_CONFIG"], !p.isEmpty { return p }
         if let idx = CommandLine.arguments.firstIndex(of: "HOMELAB_CONFIG") {
@@ -138,7 +142,13 @@ public extension Config {
             if !v.isEmpty { return v }
         }
         let home = FileManager.default.homeDirectoryForCurrentUser
-        return home.appendingPathComponent(".config/homelab-dashboard/config.yaml").path
+        let candidates = [
+            home.appendingPathComponent("Library/Application Support/homelab-dashboard/config.yaml").path,
+            home.appendingPathComponent(".config/homelab-dashboard/config.yaml").path,
+        ]
+        let fm = FileManager.default
+        for c in candidates where fm.fileExists(atPath: c) { return c }
+        return candidates[0]
     }
 
     static func parse(_ yamlText: String) throws -> Config {

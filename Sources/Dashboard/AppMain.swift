@@ -74,6 +74,8 @@ final class DashboardStore: ObservableObject {
         var c = config
         guard mutate(&c) else { return false }
         do {
+            let dir = (path as NSString).deletingLastPathComponent
+            try FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
             try c.yaml.write(toFile: path, atomically: true, encoding: .utf8)
         } catch {
             reload(c) // fallback: только в память
