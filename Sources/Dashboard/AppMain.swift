@@ -287,6 +287,10 @@ public struct HomeLabApp: App {
 final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.regular)
+        // Не даём AppKit прибить приложение по AutomaticTermination/SuddenTermination,
+        // пока окно ещё не успело открыться (иначе headless-квitt через пару секунд).
+        ProcessInfo.processInfo.disableSuddenTermination()
+        ProcessInfo.processInfo.disableAutomaticTermination("dashboard window")
         if let icon = AppIcon.make() { NSApp.applicationIconImage = icon }
         NSApp.activate(ignoringOtherApps: true)
     }
