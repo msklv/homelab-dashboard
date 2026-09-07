@@ -221,6 +221,19 @@ struct MockExecutor: CommandExecuting {
     }
 }
 
+final class MockRecordingExecutor: CommandExecuting {
+    let sshResult: ExecResult
+    private(set) var calls = 0
+    init(sshResult: ExecResult) { self.sshResult = sshResult }
+    func run(_ argv: [String]) -> ExecResult {
+        calls += 1
+        if argv.first?.contains("ping") == true {
+            return ExecResult(exitCode: 0, stdout: "round-trip min/avg/max = 1.000/2.500/4.000 ms")
+        }
+        return sshResult
+    }
+}
+
 func testPoller() {
     print("-- Poller --")
     let okOut = """
@@ -252,6 +265,25 @@ func testPoller() {
     do {
         let (p, h) = make(3, ExecResult(exitCode: 255, stdout: "down"))
         eq(p.collectOnce(h).status, .pending, "pending before threshold")
+    }
+    do {
+        // пауза: приостановленный хост не опрашивается; resume -> мгновенный опрос
+        var c5 = Config(); c5.offlineAfterMisses = 2
+        let h5 = HostConfig(name: "h5", ssh: "user@192.0.2.15")
+        c5.hosts = [h5]
+        let ex5 = MockRecordingExecutor(sshResult: ExecResult(exitCode: 0, stdout: okOut))
+        let p5 = Poller(config: c5, ssh: SshRunner(executor: ex5), pinger: PingRunner(executor: ex5))
+        let before = ex5.calls
+        p5.setPaused(h5, true)
+        p5.tick(h5)
+        eq(ex5.calls, before, "paused хост не опрашивается")
+        ok(p5.isPaused(h5.name), "isPaused true после паузы")
+        p5.setPaused(h5, false)
+        ok(!p5.isPaused(h5.name), "isPaused false после старта")
+        // при снятии паузы мгновенный опрос уходит в фон (не блокирует вызывающий поток)
+        let afterResume = ex5.calls
+        p5.tick(h5)
+        ok(ex5.calls > afterResume, "после старта tick снова опрашивает хост")
     }
 }
 

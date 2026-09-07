@@ -16,6 +16,7 @@ public final class Poller {
     private var timers: [String: DispatchSourceTimer] = [:]
     private let sem: DispatchSemaphore
     private var running = false
+    private var pausedHosts: Set<String> = []
 
     private final class HostState {
         let lock = NSLock()
@@ -55,6 +56,25 @@ public final class Poller {
     }
 
     public var isRunning: Bool { lock.lock(); defer { lock.unlock() }; return running }
+
+    /// Приостановленные хосты (по имени). Состояние рантайма, не персистится.
+    public func isPaused(_ name: String) -> Bool {
+        lock.lock(); defer { lock.unlock() }
+        return pausedHosts.contains(name)
+    }
+
+    public func setPaused(_ host: HostConfig, _ paused: Bool) {
+        lock.lock()
+        if paused { pausedHosts.insert(host.name) } else { pausedHosts.remove(host.name) }
+        lock.unlock()
+        // при снятии паузы — один мгновенный опрос, НО не на вызывающем потоке
+        // (вызов приходит из UI, блокирующий ssh завис бы на главном потоке)
+        if !paused && !isPaused(host.name) { // снятие паузы
+            DispatchQueue.global(qos: .utility).async { [weak self] in
+                self?.tick(host)
+            }
+        }
+    }
 
     private func schedule(_ host: HostConfig) {
         let q = DispatchQueue(label: "homelab.poller.\(host.name)")
@@ -124,7 +144,10 @@ public final class Poller {
         return "SSH \(state), exit \(res.exitCode)\(head.isEmpty ? "" : " — \(head)")"
     }
 
-    public func tick(_ host: HostConfig) { _ = collectOnce(host) }
+    public func tick(_ host: HostConfig) {
+        if isPaused(host.name) { return }
+        _ = collectOnce(host)
+    }
 
     public func snapshot(for name: String) -> HostSnapshot? {
         let st: HostState? = {

@@ -8,6 +8,7 @@ final class DashboardStore: ObservableObject {
     @Published var tagFilter: Set<String> = []
     @Published var themeOverride: ThemeMode?
     @Published var errorMessage: String?
+    @Published var pausedHosts: Set<String> = []
 
     public let log: LogStore
 
@@ -62,6 +63,7 @@ final class DashboardStore: ObservableObject {
         log.log(.info, "config", "Конфиг перечитан: хостов \(added.count)")
         let names = Set(added)
         snapshots = snapshots.filter { names.contains($0.key) }
+        pausedHosts = [] // сброс пауз при перечитывании конфига
         startPoller(with: c)
     }
 
@@ -199,6 +201,15 @@ final class DashboardStore: ObservableObject {
 
     func toggleTag(_ t: String) {
         if tagFilter.contains(t) { tagFilter.remove(t) } else { tagFilter.insert(t) }
+    }
+
+    func togglePause(_ name: String) {
+        guard let host = config.hosts.first(where: { $0.name == name }),
+              let p = poller else { return }
+        let pausing = !pausedHosts.contains(name)
+        p.setPaused(host, pausing)
+        if pausing { pausedHosts.insert(name) } else { pausedHosts.remove(name) }
+        log.log(.info, name, pausing ? "Пауза опроса" : "Опрос возобновлён")
     }
 
     func isFilterActive(_ t: String) -> Bool { tagFilter.contains(t) }

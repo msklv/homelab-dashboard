@@ -31,6 +31,7 @@ struct ContentView: View {
     @State private var quickAddStatus: String?
     @State private var quickAddIsError = false
     @State private var showLogs = false
+    @State private var collapsedGroups: Set<String> = []
 
     var body: some View {
         ScrollView {
@@ -49,10 +50,24 @@ struct ContentView: View {
                 } else {
                     ForEach(store.config.groupsWithUngrouped, id: \.self) { group in
                         VStack(alignment: .leading, spacing: 8) {
-                            Text(group)
-                                .font(.callout.weight(.semibold))
-                                .foregroundColor(.secondary)
-                            HostGrid(hosts: store.hosts(in: group))
+                            HStack(spacing: 5) {
+                                Image(systemName: collapsedGroups.contains(group) ? "chevron.right" : "chevron.down")
+                                    .font(.caption2.weight(.semibold))
+                                    .foregroundColor(.secondary)
+                                Text(group)
+                                    .font(.callout.weight(.semibold))
+                                    .foregroundColor(.secondary)
+                                Spacer(minLength: 0)
+                            }
+                            .contentShape(Rectangle())
+                            .onTapGesture(count: 1) {
+                                let collapsed = !collapsedGroups.contains(group)
+                                if collapsed { collapsedGroups.insert(group) } else { collapsedGroups.remove(group) }
+                            }
+                            .help("Клик — свернуть/развернуть группу")
+                            if !collapsedGroups.contains(group) {
+                                HostGrid(hosts: store.hosts(in: group))
+                            }
                         }
                     }
                 }
@@ -257,6 +272,7 @@ struct HostCard: View {
 
     var body: some View {
         let s = store.snapshot(for: host.name)
+        let paused = store.pausedHosts.contains(host.name)
         VStack(alignment: .leading, spacing: 7) {
             header(s)
             specsLine(s)
@@ -269,6 +285,15 @@ struct HostCard: View {
         .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
         .overlay(RoundedRectangle(cornerRadius: 12).stroke(borderColor(s), lineWidth: 1))
         .overlay(RoundedRectangle(cornerRadius: 12).stroke(dropActive ? LevelColor.accent : .clear, lineWidth: 2))
+        .opacity(paused ? 0.55 : 1)
+        .overlay(alignment: .topTrailing) {
+            if paused {
+                Label("пауза", systemImage: "pause.circle.fill")
+                    .font(.caption2.weight(.semibold))
+                    .foregroundColor(LevelColor.warning)
+                    .padding(8)
+            }
+        }
         .onDrag { NSItemProvider(object: host.name as NSString) }
         .onDrop(of: [.text], isTargeted: $dropActive) { providers in
             guard let p = providers.first else { return false }
@@ -325,6 +350,14 @@ struct HostCard: View {
                 store.log.log(.info, "action", "Карточка «\(host.name)»: markdown скопирован (\(md.count) симв.)")
             } label: {
                 Label("Копировать карточку (MD)", systemImage: "doc.on.doc")
+            }
+            Divider()
+            Button { store.togglePause(host.name) } label: {
+                if store.pausedHosts.contains(host.name) {
+                    Label("Старт (снять паузу)", systemImage: "play.fill")
+                } else {
+                    Label("Пауза", systemImage: "pause.fill")
+                }
             }
             Divider()
             Button("Удалить хост…", role: .destructive) { showDelete = true }
