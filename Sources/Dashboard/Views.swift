@@ -157,7 +157,7 @@ struct ContentView: View {
             .buttonStyle(.plain)
             .help("Добавить хост")
 
-            TextField("Добавить хост: user@host, IP или hostname…", text: $quickAdd)
+            TextField("Добавить хост: user@host[:port] или имя=user@host[:port]…", text: $quickAdd)
                 .textFieldStyle(.plain)
                 .font(.callout)
                 .padding(.horizontal, 10)

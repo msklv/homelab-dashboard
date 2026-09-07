@@ -388,6 +388,15 @@ func testSshPort() {
     ok(d1?.name == "h" && d1?.ssh == "user@h:2222", "quickadd: name=host, ssh keeps :port")
     let d2 = QuickAdd.parse("h:2222", currentUser: "me")
     ok(d2?.name == "h" && d2?.ssh == "me@h:2222", "quickadd bare:port -> name=host, ssh=user@host:port")
+    let d3 = QuickAdd.parse("vm2=user@h:2222", currentUser: "me")
+    ok(d3?.name == "vm2" && d3?.ssh == "user@h:2222", "quickadd explicit name=address")
+    let d4 = QuickAdd.parse("deploy:vm-02@h:2222", currentUser: "me")
+    ok(d4?.name == "vm-02" && d4?.ssh == "deploy:vm-02@h:2222", "jump user:alias@host -> alias name")
+    // коллизия имени (один бастион, разные VM) — теперь решается alias-именами
+    var c3 = Config()
+    c3.hosts = [HostConfig(name: "vm-01", ssh: "deploy:vm-01@h:2222")]
+    let e4 = QuickAdd.append(to: &c3, address: "deploy:vm-02@h:2222", currentUser: "me")
+    ok(e4 == nil && c3.hosts.count == 2 && c3.hosts[1].name == "vm-02", "same bastion, distinct VM aliases both added")
     let rec = RecordingExecutor(result: ExecResult(exitCode: 0, stdout: ""))
     let runner = SshRunner(executor: rec)
     runner.run(HostConfig(name: "x", ssh: "user@h:2222"), timeout: 5, batch: "echo hi")
