@@ -197,7 +197,7 @@ public enum CommandBatch {
             "echo HL_LINK=$(gw=$(awk '$2==\"00000000\"{print $1; exit}' /proc/net/route 2>/dev/null); case \"$gw\" in lo|tun*|utun*|wg*|veth*|cilium_*|lxc_*|docker*|br-*|virbr*) gw=\"\";; esac; s=\"\"; [ -n \"$gw\" ] && s=$(cat /sys/class/net/$gw/speed 2>/dev/null); [ -z \"$s\" ] && s=$(for f in /sys/class/net/*/speed; do d=$(basename $(dirname $f)); [ \"$(cat $(dirname $f)/operstate 2>/dev/null)\" = up ] || continue; case \"$d\" in lo|cilium_*|lxc_*|docker*|veth*|br-*|virbr*|tun*|tap*|vnet*|utun*|wg*) continue;; esac; sp=$(cat $f 2>/dev/null); [ -n \"$sp\" ] && echo $sp; done | sort -n | tail -1); echo $s)",
             "echo HL_NET_RX=$(awk 'NR>2{gsub(/:/,\"\",$1); rx+=$2; tx+=$10} END{print rx+0}' /proc/net/dev)",
             "echo HL_NET_TX=$(awk 'NR>2{gsub(/:/,\"\",$1); rx+=$2; tx+=$10} END{print tx+0}' /proc/net/dev)",
-            "echo HL_CPU=$(top -bn1 2>/dev/null | awk '/%Cpu/{gsub(/%/,\"\",$8); print 100-$8; exit}')",
+            "echo HL_CPU=$(top -bn1 2>/dev/null | awk '/(%?[Cc][Pp][Uu])\\(s\\):/{gsub(/%/,\"\",$8); print 100-$8; exit}')",
             "echo HL_DISK_R=$(awk '$3 ~ /^(sd[a-z]+|nvme[0-9]+n[0-9]+)$/{r+=$6*512} END{print r+0}' /proc/diskstats)",
             "echo HL_DISK_W=$(awk '$3 ~ /^(sd[a-z]+|nvme[0-9]+n[0-9]+)$/{w+=$10*512} END{print w+0}' /proc/diskstats)",
         ].joined(separator: " ; ")

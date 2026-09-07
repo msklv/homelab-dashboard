@@ -102,6 +102,35 @@ func testCommands() {
     eq(kv["HL_CPU"], "2.5", "kv cpu")
 }
 
+func shell(_ cmd: String) -> String? {
+    let p = Process()
+    p.executableURL = URL(fileURLWithPath: "/bin/sh")
+    p.arguments = ["-c", cmd]
+    let out = Pipe(); p.standardOutput = out; p.standardError = Pipe()
+    do { try p.run(); p.waitUntilExit() } catch { return nil }
+    let d = out.fileHandleForReading.readDataToEndOfFile()
+    return String(data: d, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines)
+}
+
+func testCpuTopParse() {
+    print("-- CPU top parser (regression) --")
+    // достаём из собранного батча реальный linux-awk для HL_CPU (top -bn1)
+    let batch = CommandBatch.build(for: HostConfig(name: "k8s-01", ssh: "r@h"))
+    guard let s = batch.range(of: "top -bn1 2>/dev/null | awk '")?.upperBound,
+          let e = batch[s...].firstIndex(of: "'") else {
+        ok(false, "awk cpu есть в linux-батче")
+        return
+    }
+    let awkProg = String(batch[s..<e])
+    func idle(_ line: String) -> Double? {
+        let script = "printf '%s\\n' \"" + line + "\" | awk '" + awkProg + "'"
+        return shell(script).flatMap(Double.init)
+    }
+    // ранее баг: паттерн /%Cpu/ (нижний регистр) не матчил строку top "%CPU(s):"
+    close(idle("%CPU(s):  15.9 us,  0.0 sy,  0.0 ni, 84.1 id,  0.0 wa,  0.0 hi,  0.0 si,  0.0 st") ?? -1, 15.9, "modern %CPU(s): -> 100-idle", 0.05)
+    close(idle("Cpu(s):  91.8 us,  0.0 sy,  0.0 ni,  8.2 id,  0.0 wa,  0.0 hi,  0.0 si,  0.0 st") ?? -1, 91.8, "legacy Cpu(s): (no %) -> 100-idle", 0.05)
+}
+
 // MARK: - SampleEngine
 
 func testSampleEngine() throws {
@@ -338,6 +367,7 @@ do {
     testQuickAdd()
     try testYamlRoundTrip()
     testCommands()
+    testCpuTopParse()
     try testSampleEngine()
     testPoller()
     testWatcher()
