@@ -1,0 +1,35 @@
+poll_interval: 5
+timeout: 5
+offline_after_misses: 2
+max_concurrent: 4
+theme: system
+
+thresholds:
+  warning: 60
+  critical: 85
+
+groups:
+  - name: Кластер k8s
+  - name: NAS / storage
+
+tags:
+  - { name: prod, color: green }
+  - { name: backup, color: blue }
+  - { name: critical, color: red }
+
+hosts:
+  - name: k8s-01
+    ssh: root@192.168.3.10   # пример; замените на свои реальные доступы
+    os: linux
+    group: Кластер k8s
+    tags: [prod, critical]
+    region: ru
+    metrics: { cores: true, ram: true, disk: true, temp: true, net: true, iostat: true }
+
+  - name: mac-mini
+    ssh: user@192.168.3.15
+    os: macos
+    group: NAS / storage
+    tags: [backup]
+    region: ru
+    metrics: { cores: true, ram: true, disk: true, temp: false, net: true, iostat: false }
