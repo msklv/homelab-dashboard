@@ -285,11 +285,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 /// Открывает новое окно Терминала и запускает в нём SSH к переданному хосту.
 enum TerminalOpener {
     static func open(_ destination: String, log: LogStore? = nil) {
-        let escaped = destination.replacingOccurrences(of: "\"", with: "\\\"")
+        let seg = SshRunner.split(destination)
+        let raw = seg.1.map { "ssh -o ServerAliveInterval=30 -p \($0) \(seg.0)" } ?? "ssh -o ServerAliveInterval=30 \(destination)"
+        let escaped = raw.replacingOccurrences(of: "\"", with: "\\\"")
         let script = """
         tell application "Terminal"
             activate
-            do script "ssh -o ServerAliveInterval=30 \(escaped)"
+            do script "\(escaped)"
         end tell
         """
         var err: NSDictionary?
@@ -303,7 +305,6 @@ enum TerminalOpener {
         }
     }
 }
-
 /// Рисует иконку приложения программно (SwiftPM без asset-каталога):
 /// скруглённый квадрат с градиентом и символом серверной стойки.
 enum AppIcon {

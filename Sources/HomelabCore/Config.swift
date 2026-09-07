@@ -45,12 +45,13 @@ public struct HostConfig: Equatable, Sendable {
         self.timeout = timeout
     }
 
-    /// Хост для ping: часть строки ssh до последнего '@'.
+    /// Хост для ping: часть строки ssh до последнего '@' и до необязательного порта.
     public var pingHost: String {
-        if let at = ssh.lastIndex(of: "@") {
-            return String(ssh[ssh.index(after: at)...])
+        let t = SshRunner.split(ssh).0 // user@host без :port
+        if let at = t.lastIndex(of: "@") {
+            return String(t[t.index(after: at)...])
         }
-        return ssh
+        return t
     }
 }
 

@@ -95,6 +95,7 @@ func testCommands() {
     ok(batch.contains("/proc/meminfo"), "batch probes /proc (linux)")
     ok(batch.contains("sysctl"), "batch probes sysctl (macos)")
     ok(batch.contains("HL_OS=linux") && batch.contains("HL_OS=macos"), "os auto-detected in-shell")
+    ok(batch.contains("0|-1) s="), "linux link: speed -1/0/empty treated as unknown (virtio vm)")
 
     print("-- OutputParser --")
     let kv = OutputParser.keyValues("x\nHL_CORES=12\nHL_CPU=2.5\n")
@@ -202,6 +203,8 @@ func testSampleEngine() throws {
     eq(Format.link(2500), "2.5G", "fmt link 2.5G")
     eq(Format.link(1000), "1G", "fmt link 1G")
     eq(Format.link(100), "100M", "fmt link 100M")
+    eq(Format.link(-1), "—", "fmt link -1 (virtio unknown) -> dash")
+    eq(Format.link(nil), "—", "fmt link nil -> dash")
     eq(Format.temp(39.7), "40°", "fmt temp")
     eq(Format.temp(nil), "—", "fmt temp none")
 }
@@ -359,6 +362,40 @@ func testYamlRoundTrip() throws {
     try? FileManager.default.removeItem(at: tmp)
 }
 
+final class CallRecorder { var calls: [String] = [] }
+struct RecordingExecutor: CommandExecuting {
+    let rec = CallRecorder()
+    let result: ExecResult
+    func run(_ argv: [String]) -> ExecResult {
+        rec.calls.append(argv.joined(separator: " "))
+        return result
+    }
+}
+
+func testSshPort() {
+    print("-- ssh port support --")
+    eq(SshRunner.split("user@h").1, nil, "no port -> nil")
+    eq(SshRunner.split("user@h").0, "user@h", "target unchanged")
+    eq(SshRunner.split("user@h:2222").0, "user@h", "port: target")
+    eq(SshRunner.split("user@h:2222").1 ?? -1, 2222, "port parsed")
+    eq(SshRunner.split("h:22junk").1, nil, "non-numeric port ignored")
+    eq(SshRunner.split("[2001:db8::1]:22").0, "[2001:db8::1]", "ipv6 bracket + port")
+    eq(SshRunner.split(":0").1, nil, "port 0 rejected")
+    eq(SshRunner.split("user@h:70000").1, nil, "port >65535 rejected")
+    eq(HostConfig(name: "x", ssh: "user@h:2222").pingHost, "h", "pingHost strips port")
+    eq(HostConfig(name: "x", ssh: "user@h").pingHost, "h", "pingHost no port")
+    let d1 = QuickAdd.parse("user@h:2222", currentUser: "me")
+    ok(d1?.name == "h" && d1?.ssh == "user@h:2222", "quickadd: name=host, ssh keeps :port")
+    let d2 = QuickAdd.parse("h:2222", currentUser: "me")
+    ok(d2?.name == "h" && d2?.ssh == "me@h:2222", "quickadd bare:port -> name=host, ssh=user@host:port")
+    let rec = RecordingExecutor(result: ExecResult(exitCode: 0, stdout: ""))
+    let runner = SshRunner(executor: rec)
+    runner.run(HostConfig(name: "x", ssh: "user@h:2222"), timeout: 5, batch: "echo hi")
+    let argv = rec.rec.calls.first ?? ""
+    ok(argv.contains("-p") && argv.contains("2222"), "ssh argv has -p 2222")
+    ok(!argv.contains("user@h:2222"), "argv target has no :port (invalid ssh syntax)")
+}
+
 // MARK: - main
 
 
@@ -368,6 +405,7 @@ do {
     try testYamlRoundTrip()
     testCommands()
     testCpuTopParse()
+    testSshPort()
     try testSampleEngine()
     testPoller()
     testWatcher()

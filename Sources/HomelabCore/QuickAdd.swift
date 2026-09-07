@@ -21,9 +21,10 @@ public enum QuickAdd {
         var ssh: String
         if let at = s.firstIndex(of: "@") {
             ssh = s
-            name = String(s[s.index(after: at)...])
+            let host = String(s[s.index(after: at)...])
+            name = SshRunner.split(host).0 // без :port, чтобы имя было чистым host'ом
         } else {
-            name = s
+            name = SshRunner.split(s).0
             ssh = currentUser + "@" + s
         }
         guard !name.isEmpty else { return nil }

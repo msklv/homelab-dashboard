@@ -767,9 +767,11 @@ private enum HostCardMarkdown {
         let io = "R \(Format.bytesPerSecond(s.diskRead)) · W \(Format.bytesPerSecond(s.diskWrite))"
 
         var lines: [String] = []
-        lines.append("### \(title)  ·  \(status)  ·  ping \(ping)")
-        lines.append("")
-        lines.append("- **Подключение:** `ssh \(s.host.ssh)`")
+            lines.append("### \(title)  ·  \(status)  ·  ping \(ping)")
+            lines.append("")
+            let target = SshRunner.split(s.host.ssh)
+            let sshCmd = target.1.map { "ssh -p \($0) \(target.0)" } ?? "ssh \(s.host.ssh)"
+            lines.append("- **Подключение:** `\(sshCmd)`")
         lines.append("- **Хост:** \(osName) · \(cores) Cores · RAM \(ramUsed)/\(ramTotal) (\(ramPct)) · Диск \(kind) \(disk)")
         lines.append("- **Нагрузка:** CPU **\(cpu)** · RAM **\(ramPct)**")
         lines.append("- **Uptime:** \(uptime) · Температура: CPU \(tempC) / Плата \(tempB)")
@@ -783,7 +785,7 @@ private enum HostCardMarkdown {
     }
 
     private static func linkText(_ s: HostSnapshot) -> String {
-        guard let m = s.linkMbps else { return "—" }
+        guard let m = s.linkMbps, m > 0 else { return "—" }
         if m >= 1000 {
             if m % 1000 == 0 { return "\(m / 1000)G" }
             return String(format: "%.1fG", Double(m) / 1000.0)

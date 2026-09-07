@@ -56,18 +56,29 @@ public struct SshRunner {
 
     /// Выполнить batch на сервере.
     public func run(_ host: HostConfig, timeout: Int, batch: String) -> ExecResult {
-        let argv = [
-            "/usr/bin/ssh",
-            "-o", "BatchMode=yes",
-            "-o", "ConnectTimeout=\(max(1, timeout))",
-            "-o", "StrictHostKeyChecking=accept-new",
-            "-o", "LogLevel=ERROR",
-            host.ssh,
-            batch,
-        ]
-        return executor.run(argv)
+            let (target, port) = SshRunner.split(host.ssh)
+            var argv = [
+                "/usr/bin/ssh",
+                "-o", "BatchMode=yes",
+                "-o", "ConnectTimeout=\(max(1, timeout))",
+                "-o", "StrictHostKeyChecking=accept-new",
+                "-o", "LogLevel=ERROR",
+            ]
+            if let port { argv += ["-p", "\(port)"] }
+            argv += [target, batch]
+            return executor.run(argv)
+        }
+
+        /// Разбирает ssh-адрес на (target, port?). Синтаксис `user@host[:port]`.
+        /// Порт — только если после последнего `:` чистые цифры (не ломать [IPv6]).
+        public static func split(_ ssh: String) -> (String, Int?) {
+            guard let c = ssh.lastIndex(of: ":") else { return (ssh, nil) }
+            let tail = ssh[ssh.index(after: c)...]
+            guard !tail.isEmpty, tail.allSatisfy({ $0.isNumber }) else { return (ssh, nil) }
+            guard let p = Int(tail), p > 0, p <= 65535 else { return (ssh, nil) }
+            return (String(ssh[..<c]), p)
+        }
     }
-}
 
 /// Задержка до хоста через системный ping.
 public struct PingRunner {
