@@ -90,9 +90,13 @@ public enum YamlMini {
         /// Значение для `key: val`, где k может быть пустым (блок на след. строке).
         private mutating func value(for raw: String, parentIndent: Int) -> YVal {
             if raw.isEmpty {
-                if let nx = peekNonBlank(), nx.indent > parentIndent {
-                    if nx.isSeq { return .arr(parseSequence(at: nx.indent)) }
-                    return .map(parseMapping(keyIndent: nx.indent))
+                if let nx = peekNonBlank() {
+                    if nx.isSeq && nx.indent >= parentIndent {
+                        // zero-indent блок-последовательность (`key:\n- a`): отступ элементов
+                        // РАВЕН отступу ключа — валидный YAML, раньше падал в .null
+                        return .arr(parseSequence(at: nx.indent))
+                    }
+                    if nx.indent > parentIndent { return .map(parseMapping(keyIndent: nx.indent)) }
                 }
                 return .null
             }

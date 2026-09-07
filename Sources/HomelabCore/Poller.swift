@@ -88,8 +88,9 @@ public final class Poller {
     /// Синхронный одиночный сбор метрики для хоста (используется и таймером, и тестами).
     @discardableResult
     public func collectOnce(_ host: HostConfig) -> HostSnapshot {
-        _ = sem.wait(timeout: .now() + .seconds(30))
-        defer { sem.signal() }
+        let acquired = sem.wait(timeout: .now() + .seconds(30)) == .success
+        // При таймауте слот НЕ получен — не signal()ить (иначе счётчик растёт выше maxConcurrent).
+        defer { if acquired { sem.signal() } }
 
         let st = state(for: host.name)
         let timeout = config.timeout(for: host)

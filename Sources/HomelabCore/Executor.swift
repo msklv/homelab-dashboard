@@ -17,6 +17,11 @@ public protocol CommandExecuting {
 public struct SystemCommandExecutor: CommandExecuting {
     public init() {}
 
+    /// Потолочный лимит на выполнение любой remote-команды. ConnectTimeout режет только
+    /// TCP-фазу; без этого лимита зависшая команда блокировала бы очередь хоста и слот
+    /// семафора навсегда.
+    private let maxExecSeconds: TimeInterval = 25
+
     public func run(_ argv: [String]) -> ExecResult {
         guard argv.count >= 1 else { return ExecResult(exitCode: -1, stdout: "") }
         let p = Process()
@@ -33,11 +38,26 @@ public struct SystemCommandExecutor: CommandExecuting {
             return ExecResult(exitCode: -1, stdout: "exec error: \(error)")
         }
 
+        // Читаем stdout в фоне (readToEnd блокирует), пока отслеживаем потолочный таймаут.
         let handle = pipe.fileHandleForReading
+        let q = DispatchQueue(label: "homelab.exec.read")
+        let done = DispatchSemaphore(value: 0)
         var data = Data()
-        // Читаем асинхронно, чтобы не блокировать до ожидания статуса.
-        let available = try? handle.readToEnd()
-        if let available { data = available }
+        q.async {
+            data = (try? handle.readToEnd()) ?? Data()
+            done.signal()
+        }
+
+        let deadline = Date().addingTimeInterval(maxExecSeconds)
+        while done.wait(timeout: .now()) == .timedOut {
+            if Date() >= deadline {
+                p.terminate()
+                usleep(50_000)
+                if p.isRunning { kill(p.processIdentifier, SIGKILL) }
+                break
+            }
+            usleep(10_000)
+        }
         p.waitUntilExit()
         var out = String(data: data, encoding: .utf8) ?? ""
         // Для диагностики: при ненулевом exit-коде подмешиваем stderr в вывод.
@@ -85,7 +105,7 @@ public struct PingRunner {
     public let executor: CommandExecuting
     public let count: Int
     public let timeout: Int
-    public init(executor: CommandExecuting = SystemCommandExecutor(), count: Int = 3, timeout: Int = 2) {
+    public init(executor: CommandExecuting = SystemCommandExecutor(), count: Int = 3, timeout: Int = 3) {
         self.executor = executor
         self.count = count
         self.timeout = timeout

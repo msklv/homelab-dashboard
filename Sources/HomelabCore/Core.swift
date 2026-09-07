@@ -180,9 +180,12 @@ public enum CommandBatch {
             // физические en*/eth*. Колонки netstat -ib: $7=Ibytes(RX), $10=Obytes(TX) (не $12).
             "echo HL_NET_RX=$(netstat -ib | awk '$3 ~ /^<Link/ && $1 ~ /^(en|enx|eth|enP)/ {rx+=$7; tx+=$10} END{print rx+0}')",
             "echo HL_NET_TX=$(netstat -ib | awk '$3 ~ /^<Link/ && $1 ~ /^(en|enx|eth|enP)/ {rx+=$7; tx+=$10} END{print tx+0}')",
-            "echo HL_CPU=$(top -l 1 -n 0 | awk '/CPU usage/{gsub(/%/,\"\",$7); print 100-$7; exit}')",
-            "io=$(iostat -w 1 -c 2 2>/dev/null | awk '/disk[0-9]/&&NF<6{for(i=1;i<=NF;i++){if($i~/^disk[0-9]/)nd++}} /^[[:space:]]*[0-9]/{for(i=3;i<=3*nd;i+=3){s+=$i}} END{print int(s*1048576)}'); echo HL_DISK_R=$io",
-            "echo HL_DISK_W=",
+            "echo HL_CPU=$(top -l 2 -n 0 -s 1 2>/dev/null | awk '/CPU usage/{gsub(/%/,\"\",$7); v=100-$7} END{print v}')",
+            // Живой CPU — 2-й сэмпл top -l 2 (первый -l 1/`-bn1` = среднее с загрузки).
+            // Кумулятивные байты диска из ioreg (без root): SampleEngine берёт дельту
+            // (n−o)/dt → MB/s, поэтому нужен монотонный счётчик, а не MB/s-рейт iostat.
+            "echo HL_DISK_R=$(ioreg -c IOBlockStorageDriver -r -w 0 2>/dev/null | grep -o '\"Bytes (Read)\"=[0-9]*' | cut -d= -f2 | awk '{s+=$1} END{print s+0}')",
+            "echo HL_DISK_W=$(ioreg -c IOBlockStorageDriver -r -w 0 2>/dev/null | grep -o '\"Bytes (Write)\"=[0-9]*' | cut -d= -f2 | awk '{s+=$1} END{print s+0}')",
         ].joined(separator: " ; ")
         let linux = [
             "echo HL_OS=linux",
@@ -198,9 +201,10 @@ public enum CommandBatch {
             "zt=\"\"; for z in /sys/class/thermal/thermal_zone*; do [ -r $z/temp ] || continue; t=$(cat $z/temp 2>/dev/null); ty=$(cat $z/type 2>/dev/null); [ -z \"$t\" ] && continue; zt=\"$zt $ty:$t\"; done; echo $zt | awk '{cb=-1; bb=-1; for(i=1;i<=NF;i++){split($i,a,\":\"); v=a[2]/1000; if(a[1] ~ /x86_pkg_temp|cpu_thermal|soc_thermal|tsens|package/) { if(v>cb) cb=v } else if(v>bb) bb=v }; if(cb<0 && bb>=0) cb=bb; if(cb>=0) printf \"HL_TEMP=%.1f\\n\", cb; if(bb>=0) printf \"HL_TEMP_BOARD=%.1f\\n\", bb}'",
             // Скорость реального аплинка = интерфейс маршрута по умолчанию, иначе самая быстрая поднятая физическая.
             "echo HL_LINK=$(gw=$(awk '$2==\"00000000\"{print $1; exit}' /proc/net/route 2>/dev/null); case \"$gw\" in lo|tun*|utun*|wg*|veth*|cilium_*|lxc_*|docker*|br-*|virbr*) gw=\"\";; esac; s=\"\"; [ -n \"$gw\" ] && s=$(cat /sys/class/net/$gw/speed 2>/dev/null); case \"$s\" in \"\"|0|-1) s=\"\";; esac; [ -z \"$s\" ] && s=$(for f in /sys/class/net/*/speed; do d=$(basename $(dirname $f)); [ \"$(cat $(dirname $f)/operstate 2>/dev/null)\" = up ] || continue; case \"$d\" in lo|cilium_*|lxc_*|docker*|veth*|br-*|virbr*|tun*|tap*|vnet*|utun*|wg*) continue;; esac; sp=$(cat $f 2>/dev/null); case \"$sp\" in \"\"|0|-1) ;; *) echo $sp ;; esac; done | sort -n | tail -1); case \"$s\" in \"\"|0|-1) s=\"\";; esac; echo $s)",
-            "echo HL_NET_RX=$(awk 'NR>2{gsub(/:/,\"\",$1); rx+=$2; tx+=$10} END{print rx+0}' /proc/net/dev)",
-            "echo HL_NET_TX=$(awk 'NR>2{gsub(/:/,\"\",$1); rx+=$2; tx+=$10} END{print tx+0}' /proc/net/dev)",
-            "echo HL_CPU=$(top -bn1 2>/dev/null | awk '/(%?[Cc][Pp][Uu])\\(s\\):/{gsub(/%/,\"\",$8); print 100-$8; exit}')",
+            "echo HL_NET_RX=$(awk 'NR>2{gsub(/:/,\"\",$1); if($1 ~ /^(eth|en|wl)/){rx+=$2; tx+=$10}} END{print rx+0}' /proc/net/dev)",
+            "echo HL_NET_TX=$(awk 'NR>2{gsub(/:/,\"\",$1); if($1 ~ /^(eth|en|wl)/){rx+=$2; tx+=$10}} END{print tx+0}' /proc/net/dev)",
+            // Живой CPU: -bn2, 2-я итерация = интервал за 1с (первая -bn1 = среднее с загрузки).
+            "echo HL_CPU=$(top -bn2 -d 1 2>/dev/null | awk '/(%?[Cc][Pp][Uu])\\(s\\):/{gsub(/%/,\"\",$8); v=100-$8} END{print v}')",
             "echo HL_DISK_R=$(awk '$3 ~ /^(sd[a-z]+|nvme[0-9]+n[0-9]+)$/{r+=$6*512} END{print r+0}' /proc/diskstats)",
             "echo HL_DISK_W=$(awk '$3 ~ /^(sd[a-z]+|nvme[0-9]+n[0-9]+)$/{w+=$10*512} END{print w+0}' /proc/diskstats)",
         ].joined(separator: " ; ")

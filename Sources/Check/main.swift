@@ -115,21 +115,82 @@ func shell(_ cmd: String) -> String? {
 
 func testCpuTopParse() {
     print("-- CPU top parser (regression) --")
-    // достаём из собранного батча реальный linux-awk для HL_CPU (top -bn1)
-    let batch = CommandBatch.build(for: HostConfig(name: "k8s-01", ssh: "r@h"))
-    guard let s = batch.range(of: "top -bn1 2>/dev/null | awk '")?.upperBound,
-          let e = batch[s...].firstIndex(of: "'") else {
-        ok(false, "awk cpu есть в linux-батче")
-        return
+    // достаём из собранного батча реальный linux-awk для HL_CPU (top -bn2, живой 2-й сэмпл)
+        let batch = CommandBatch.build(for: HostConfig(name: "k8s-01", ssh: "r@h"))
+        guard let s = batch.range(of: "top -bn2 -d 1 2>/dev/null | awk '")?.upperBound,
+              let e = batch[s...].firstIndex(of: "'") else {
+            ok(false, "awk cpu есть в linux-батче")
+            return
+        }
+        let awkProg = String(batch[s..<e])
+                // подаём строки как отдельные аргументы printf (без \"-обёртки — ломала шелл);
+                // это же даёт несколько записей входных данных awk (для проверки «последняя строка»)
+                func cpuProg(_ lines: [String]) -> Double? {
+                    let quoted = lines.map { "'" + $0 + "'" }.joined(separator: " ")
+                    guard let s = shell("printf '%s\\n' " + quoted + " | awk '" + awkProg + "'") else { return nil }
+                    return Double(s)
+                }
+                // ранее баг: паттерн /%Cpu/ (нижний регистр) не матчил строку top "%CPU(s):"
+                close(cpuProg(["%CPU(s):  15.9 us,  0.0 sy,  0.0 ni, 84.1 id,  0.0 wa,  0.0 hi,  0.0 si,  0.0 st"]) ?? -1, 15.9, "modern %CPU(s): -> 100-idle", 0.05)
+                close(cpuProg(["Cpu(s):  91.8 us,  0.0 sy,  0.0 ni,  8.2 id,  0.0 wa,  0.0 hi,  0.0 si,  0.0 st"]) ?? -1, 91.8, "legacy Cpu(s): (no %) -> 100-idle", 0.05)
+                // топ -bn2: 1-я строка = среднее с загрузки, 2-я = живой интервал. awk должен брать ПОСЛЕДНЮЮ.
+                let two = cpuProg(["Cpu(s):  40.0 us,  0.0 sy,  0.0 ni, 60.0 id,  0.0 wa,  0.0 hi,  0.0 si,  0.0 st",
+                                   "Cpu(s):  3.0 us,  0.0 sy,  0.0 ni, 97.0 id,  0.0 wa,  0.0 hi,  0.0 si,  0.0 st"]) ?? -1
+                close(two, 3.0, "last (live) cpu line wins, not boot-average", 0.05)
+            }
+
+    func testMacCpuParse() {
+        print("-- macOS top CPU parser (regression) --")
+        let batch = CommandBatch.build(for: HostConfig(name: "mac-dev", ssh: "u@h"))
+        guard let s = batch.range(of: "top -l 2 -n 0 -s 1 2>/dev/null | awk '")?.upperBound,
+              let e = batch[s...].firstIndex(of: "'") else {
+            ok(false, "awk mac cpuc есть в mac-батче")
+            return
+        }
+        let awkProg = String(batch[s..<e])
+        // top -l 2: 1-я "CPU usage" = среднее с загрузки, 2-я = живой интервал -> последняя побеждает
+        let script = "printf '%s\\n' \"CPU usage: 4.00% user, 2.00% sys, 94.00% idle\" \"CPU usage: 12.00% user, 3.00% sys, 85.00% idle\" | awk '" + awkProg + "'"
+        guard let out = shell(script), let v = Double(out) else { ok(false, "mac awk cpu выполнился"); return }
+        close(v, 15.0, "last (live) mac cpu: 100-85=15", 0.05)
     }
-    let awkProg = String(batch[s..<e])
-    func idle(_ line: String) -> Double? {
-        let script = "printf '%s\\n' \"" + line + "\" | awk '" + awkProg + "'"
-        return shell(script).flatMap(Double.init)
+
+    func testLinuxNetFilter() {
+        print("-- linux /proc/net/dev virtual-interface filter (regression) --")
+        let batch = CommandBatch.build(for: HostConfig(name: "k8s-01", ssh: "r@h"))
+        guard let s = batch.range(of: "HL_NET_RX=$(awk '")?.upperBound,
+              let e = batch[s...].firstIndex(of: "'") else {
+            ok(false, "awk net linux есть в linux-батче")
+            return
+        }
+        let awkProg = String(batch[s..<e])
+        let lines = [
+            "Inter-|   Receive                                                |  Transmit",
+            " face |bytes    packets errs drop fifo frame compressed multicast|bytes    packets errs drop fifo colls carrier compressed",
+            "    lo: 900000000       0    0    0     0     0          0         0 900000000       0    0    0    0     0       0          0",
+            "  eth0:  500000000       0    0    0     0     0          0         0 300000000       0    0    0    0     0       0          0",
+            "docker0: 700000000       0    0    0     0     0          0         0 700000000       0    0    0    0     0       0          0",
+            "  veth:  600000000       0    0    0     0     0          0         0 600000000       0    0    0    0     0       0          0",
+        ]
+        let quoted = lines.map { "'" + $0 + "'" }.joined(separator: " ")
+        let srx = "printf '%s\\n' " + quoted + " | awk '" + awkProg + "'"
+        guard let rx = shell(srx) else { ok(false, "awk net linux выполнился"); return }
+        eq(rx, "500000000", "linux net RX: только физические eth*/en* (lo/docker/veth отброшены)")
     }
-    // ранее баг: паттерн /%Cpu/ (нижний регистр) не матчил строку top "%CPU(s):"
-    close(idle("%CPU(s):  15.9 us,  0.0 sy,  0.0 ni, 84.1 id,  0.0 wa,  0.0 hi,  0.0 si,  0.0 st") ?? -1, 15.9, "modern %CPU(s): -> 100-idle", 0.05)
-    close(idle("Cpu(s):  91.8 us,  0.0 sy,  0.0 ni,  8.2 id,  0.0 wa,  0.0 hi,  0.0 si,  0.0 st") ?? -1, 91.8, "legacy Cpu(s): (no %) -> 100-idle", 0.05)
+
+func testYamlZeroIndentSeq() {
+    print("-- YAML zero-indent sequence (hosts:\n- a) --")
+    let yaml = """
+    hosts:
+    - name: a
+      ssh: x
+    - name: b
+      ssh: y
+    """
+    let v = try! YamlMini.parseDocument(yaml)
+    guard let hosts = v.map?["hosts"]?.array else { ok(false, "hosts стал массивом"); return }
+    eq(hosts.count, 2, "two hosts из zero-indent seq")
+    ok(hosts.first?.map?["name"]?.string == "a", "host[0].name == a")
+    ok(hosts[1].map?["ssh"]?.string == "y", "host[1].ssh == y")
 }
 
 func testMacNetParse() {
@@ -446,6 +507,7 @@ func testSshPort() {
     eq(SshRunner.split("user@h:70000").1, nil, "port >65535 rejected")
     eq(HostConfig(name: "x", ssh: "user@h:2222").pingHost, "h", "pingHost strips port")
     eq(HostConfig(name: "x", ssh: "user@h").pingHost, "h", "pingHost no port")
+    ok(PingRunner().count == 3 && PingRunner().timeout == 3, "ping: -c 3 при timeout 3 (все 3 пакета возвращаются)")
     let d1 = QuickAdd.parse("user@h:2222", currentUser: "me")
     ok(d1?.name == "h" && d1?.ssh == "user@h:2222", "quickadd: name=host, ssh keeps :port")
     let d2 = QuickAdd.parse("h:2222", currentUser: "me")
@@ -476,7 +538,10 @@ do {
     try testYamlRoundTrip()
     testCommands()
     testCpuTopParse()
+    testMacCpuParse()
+    testYamlZeroIndentSeq()
     testMacNetParse()
+    testLinuxNetFilter()
     testSshPort()
     try testSampleEngine()
     testPoller()
