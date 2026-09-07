@@ -9,12 +9,15 @@ final class DashboardStore: ObservableObject {
     @Published var themeOverride: ThemeMode?
     @Published var errorMessage: String?
 
+    public let log: LogStore
+
     private var poller: Poller?
     private var watcher: ConfigWatcher?
     private(set) var path: String
 
-    init(path: String) {
+    init(path: String, log: LogStore) {
         self.path = path
+        self.log = log
         self.config = (try? Config.load(from: path)) ?? Config()
         let saved = UserDefaults.standard.string(forKey: "themeOverride")
         self.themeOverride = saved.flatMap(ThemeMode.init(rawValue:))
@@ -22,6 +25,7 @@ final class DashboardStore: ObservableObject {
 
     func start() {
         guard poller == nil else { return }
+        log.log(.info, "app", "Запуск: конфиг \(path), хостов: \(config.hosts.count)")
         startPoller(with: config)
 
         let watcher = ConfigWatcher(path: path)
@@ -30,7 +34,10 @@ final class DashboardStore: ObservableObject {
             if let c = try? Config.load(from: self.path) {
                 DispatchQueue.main.async { self.reload(c) }
             } else {
-                DispatchQueue.main.async { self.errorMessage = "Конфиг некорректен — оставлен прежний" }
+                DispatchQueue.main.async {
+                    self.errorMessage = "Конфиг некорректен — оставлен прежний"
+                    self.log.log(.error, "config", "Ошибка чтения конфига — оставлен прежний")
+                }
             }
         }
         self.watcher = watcher
@@ -40,7 +47,7 @@ final class DashboardStore: ObservableObject {
     private func startPoller(with c: Config) {
         poller?.stop()
         poller = nil
-        let p = Poller(config: c)
+        let p = Poller(config: c, log: log)
         p.onUpdate = { [weak self] _, snap in
             DispatchQueue.main.async { self?.snapshots[snap.host.name] = snap }
         }
@@ -49,9 +56,11 @@ final class DashboardStore: ObservableObject {
     }
 
     func reload(_ c: Config) {
+        let added = c.hosts.map(\.name)
         config = c
         errorMessage = nil
-        let names = Set(c.hosts.map(\.name))
+        log.log(.info, "config", "Конфиг перечитан: хостов \(added.count)")
+        let names = Set(added)
         snapshots = snapshots.filter { names.contains($0.key) }
         startPoller(with: c)
     }
@@ -90,6 +99,11 @@ final class DashboardStore: ObservableObject {
             }
             return true
         }
+        if ok {
+            log.log(.info, "action", "Добавлен хост: \(raw.trimmingCharacters(in: .whitespacesAndNewlines))")
+        } else {
+            log.log(message == nil ? .error : .warn, "action", message ?? "Не удалось сохранить конфиг")
+        }
         return ok ? nil : message
     }
 
@@ -107,10 +121,12 @@ final class DashboardStore: ObservableObject {
 
     /// Удаляет хост из конфигурации.
     func deleteHost(_ name: String) {
-        saveConfig { c in
+        if saveConfig({ c in
             guard c.hosts.contains(where: { $0.name == name }) else { return false }
             c.hosts.removeAll { $0.name == name }
             return true
+        }) {
+            log.log(.info, "action", "Удалён хост: \(name)")
         }
     }
 
@@ -187,8 +203,6 @@ final class DashboardStore: ObservableObject {
 
     var appliedTheme: ThemeMode { themeOverride ?? config.theme }
 
-    var deleteHint: String { "4 клика подряд (быстро) — удалить хост" }
-
     func cycleTheme() {
         switch appliedTheme {
         case .system: setThemeOverride(.light)
@@ -238,15 +252,19 @@ final class DashboardStore: ObservableObject {
 public struct HomeLabApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var delegate
     @StateObject private var store: DashboardStore
+    @StateObject private var logStore: LogStore
 
     public init() {
-        _store = StateObject(wrappedValue: DashboardStore(path: Config.defaultPath()))
+        let log = LogStore()
+        _logStore = StateObject(wrappedValue: log)
+        _store = StateObject(wrappedValue: DashboardStore(path: Config.defaultPath(), log: log))
     }
 
     public var body: some Scene {
         WindowGroup("Homelab Dashboard") {
             ContentView()
                 .environmentObject(store)
+                .environmentObject(logStore)
                 .frame(minWidth: 920, minHeight: 600)
         }
         .defaultSize(width: 1120, height: 760)
@@ -266,7 +284,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
 /// Открывает новое окно Терминала и запускает в нём SSH к переданному хосту.
 enum TerminalOpener {
-    static func open(_ destination: String) {
+    static func open(_ destination: String, log: LogStore? = nil) {
         let escaped = destination.replacingOccurrences(of: "\"", with: "\\\"")
         let script = """
         tell application "Terminal"
@@ -277,7 +295,11 @@ enum TerminalOpener {
         var err: NSDictionary?
         let ran = NSAppleScript(source: script)?.executeAndReturnError(&err)
         if ran == nil {
-            NSLog("HLD: не удалось открыть терминал: %@", err?[NSAppleScript.errorMessage] as? String ?? "?")
+            let msg = err?[NSAppleScript.errorMessage] as? String ?? "неизвестная ошибка"
+            log?.log(.error, "terminal", "Не удалось открыть терминал (\(destination)): \(msg)")
+            NSLog("HLD: не удалось открыть терминал: %@", msg)
+        } else {
+            log?.log(.info, "terminal", "Открыт терминал: ssh \(destination)")
         }
     }
 }

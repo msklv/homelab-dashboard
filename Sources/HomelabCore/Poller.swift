@@ -9,6 +9,8 @@ public final class Poller {
     private let pinger: PingRunner
     public var onUpdate: Update?
 
+    public let log: LogStore?
+
     private let lock = NSLock()
     private var states: [String: HostState] = [:]
     private var timers: [String: DispatchSourceTimer] = [:]
@@ -22,10 +24,11 @@ public final class Poller {
         var last: HostSnapshot?
     }
 
-    public init(config: Config, ssh: SshRunner = SshRunner(), pinger: PingRunner = PingRunner()) {
+    public init(config: Config, ssh: SshRunner = SshRunner(), pinger: PingRunner = PingRunner(), log: LogStore? = nil) {
         self.config = config
         self.ssh = ssh
         self.pinger = pinger
+        self.log = log
         self.sem = DispatchSemaphore(value: max(1, config.maxConcurrent))
     }
 
@@ -76,12 +79,14 @@ public final class Poller {
 
         st.lock.lock()
         if res.exitCode == 0 {
+            let recovered = st.misses > 0
             st.misses = 0
             do {
                 let ns = try SampleEngine.apply(res.stdout, host: host, pingMs: ping, previous: st.prev)
                 st.prev = ns
                 st.last = ns.snapshot
                 st.lock.unlock()
+                if recovered { log?.log(.info, host.name, "Хост восстановлен") }
                 onUpdate?(host, ns.snapshot)
                 return ns.snapshot
             } catch {
@@ -89,12 +94,14 @@ public final class Poller {
                 degraded.status = .pending
                 degraded.pingMs = ping
                 st.lock.unlock()
+                log?.log(.warn, host.name, "Не удалось разобрать ответ: \(error)")
                 onUpdate?(host, degraded)
                 return degraded
             }
         } else {
             st.misses += 1
             let offline = st.misses >= config.offlineAfterMisses
+            log?.log(offline ? .error : .warn, host.name, sshFailure(res, misses: st.misses, offline: offline))
             var snap = st.last ?? HostSnapshot(host: host)
             snap.status = offline ? .offline : .pending
             snap.pingMs = ping
@@ -103,6 +110,18 @@ public final class Poller {
             onUpdate?(host, snap)
             return snap
         }
+    }
+
+    private func sshFailure(_ res: ExecResult, misses: Int, offline: Bool) -> String {
+        let snippet = res.stdout
+            .split(separator: "\n", omittingEmptySubsequences: true)
+            .drop(while: { $0 != "[stderr]" })
+            .dropFirst()
+            .first
+        let detail = snippet.map(String.init) ?? ""
+        let head = detail.count > 120 ? String(detail.prefix(120)) + "…" : detail
+        let state = offline ? "offline (после \(misses) сбоев)" : "сбой №\(misses)"
+        return "SSH \(state), exit \(res.exitCode)\(head.isEmpty ? "" : " — \(head)")"
     }
 
     public func tick(_ host: HostConfig) { _ = collectOnce(host) }

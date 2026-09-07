@@ -1,4 +1,5 @@
 import SwiftUI
+import AppKit
 import UniformTypeIdentifiers
 import HomelabCore
 
@@ -25,9 +26,11 @@ private enum HostPrompt {
 
 struct ContentView: View {
     @EnvironmentObject private var store: DashboardStore
+    @EnvironmentObject private var log: LogStore
     @State private var quickAdd = ""
     @State private var quickAddStatus: String?
     @State private var quickAddIsError = false
+    @State private var showLogs = false
 
     var body: some View {
         ScrollView {
@@ -59,6 +62,11 @@ struct ContentView: View {
         .background(Color(nsColor: .windowBackgroundColor))
         .preferredColorScheme(store.colorScheme)
         .onAppear { store.start() }
+        .sheet(isPresented: $showLogs, onDismiss: { log.setPanelOpen(false) }) {
+            LogsView()
+                .environmentObject(log)
+                .onAppear { log.setPanelOpen(true) }
+        }
     }
 
     private var header: some View {
@@ -80,6 +88,26 @@ struct ContentView: View {
                 .foregroundColor(.secondary)
                 .help("Сбросить фильтр тегов")
             }
+            Button {
+                showLogs = true
+            } label: {
+                ZStack(alignment: .topTrailing) {
+                    Image(systemName: "terminal.fill")
+                        .font(.system(size: 13, weight: .semibold))
+                    if log.unseenErrors > 0 {
+                        Text("\(log.unseenErrors)")
+                            .font(.system(size: 9, weight: .bold))
+                            .foregroundColor(.white)
+                            .padding(.horizontal, 4)
+                            .padding(.vertical, 1)
+                            .background(Circle().fill(LevelColor.critical))
+                            .offset(x: 8, y: -6)
+                    }
+                }
+                .frame(width: 30, height: 30)
+            }
+            .buttonStyle(.bordered)
+            .help("Консоль действий и ошибок")
             Button(action: store.cycleTheme) {
                 Image(systemName: themeIcon())
                     .font(.system(size: 15, weight: .semibold))
@@ -222,7 +250,6 @@ struct HostGrid: View {
 struct HostCard: View {
     let host: HostConfig
     @EnvironmentObject private var store: DashboardStore
-    @State private var deleteClicks = ClickCounter(window: 0.5)
     @State private var showDelete = false
     @State private var dropActive = false
     @State private var prompt: HostPrompt?
@@ -253,12 +280,6 @@ struct HostCard: View {
             }
             return true
         }
-        .onTapGesture {
-            if deleteClicks.register() {
-                showDelete = true
-            }
-        }
-        .help("\(store.deleteHint)")
         .confirmationDialog("Удалить хост «\(host.name)»?",
                             isPresented: $showDelete,
                             titleVisibility: .visible) {
@@ -296,6 +317,16 @@ struct HostCard: View {
                 Button("Новый тег…") { prompt = .newTag }
             } label: {
                 Label("Теги: \(host.tags.count)", systemImage: "tag")
+            }
+            Divider()
+            Button {
+                let md = HostCardMarkdown.build(s)
+                let pb = NSPasteboard.general
+                pb.clearContents()
+                pb.setString(md, forType: .string)
+                store.log.log(.info, "action", "Карточка «\(host.name)»: markdown скопирован (\(md.count) симв.)")
+            } label: {
+                Label("Копировать карточку (MD)", systemImage: "doc.on.doc")
             }
             Divider()
             Button("Удалить хост…", role: .destructive) { showDelete = true }
@@ -336,7 +367,7 @@ struct HostCard: View {
                 .font(.headline)
                 .lineLimit(1)
             Button {
-                TerminalOpener.open(host.ssh)
+                TerminalOpener.open(host.ssh, log: store.log)
             } label: {
                 Image(systemName: "terminal")
                     .font(.system(size: 11, weight: .semibold))
@@ -556,4 +587,207 @@ struct TagChip: View {
 
 extension HostConfig: Identifiable {
     public var id: String { name }
+}
+
+// MARK: - Консоль действий и ошибок
+
+private enum LogFilter: String, CaseIterable, Identifiable {
+    case all = "Все", issues = "Ошибки"
+    var id: String { rawValue }
+}
+
+struct LogsView: View {
+    @EnvironmentObject private var log: LogStore
+    @Environment(\.dismiss) private var dismiss
+    @State private var filter: LogFilter = .all
+    @State private var autoscroll = true
+
+    private var visible: [LogEntry] {
+        switch filter {
+        case .all: return log.entries
+        case .issues: return log.entries.filter { $0.level != .info }
+        }
+    }
+    private var issueCount: Int { log.entries.filter { $0.level != .info }.count }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            header
+            Divider()
+            list
+            footer
+        }
+        .frame(minWidth: 620, minHeight: 420)
+    }
+
+    private var header: some View {
+        HStack(spacing: 12) {
+            Image(systemName: "terminal")
+                .foregroundColor(LevelColor.accent)
+            Text("Консоль действий и ошибок")
+                .font(.headline)
+            Group {
+                if log.entries.isEmpty {
+                    Text("пусто")
+                } else {
+                    Text("\(log.entries.count) записей · \(issueCount) ошибок")
+                }
+            }
+            .font(.caption)
+            .foregroundColor(.secondary)
+            Spacer()
+            Picker("", selection: $filter) {
+                ForEach(LogFilter.allCases) { Text($0.rawValue).tag($0) }
+            }
+            .pickerStyle(.segmented)
+            .frame(width: 176)
+            Button("Очистить") { log.clear() }
+                .disabled(log.entries.isEmpty)
+            Button("Готов") { dismiss() }
+                .keyboardShortcut(.defaultAction)
+        }
+        .padding(12)
+    }
+
+    private var list: some View {
+        ScrollViewReader { proxy in
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 2) {
+                    ForEach(visible) { entry in
+                        LogRow(entry: entry).id(entry.id)
+                    }
+                }
+                .padding(.horizontal, 10)
+                .padding(.vertical, 6)
+            }
+            .background(Color(nsColor: .textBackgroundColor))
+            .onChange(of: log.entries.count) { _ in
+                if autoscroll, let last = visible.last {
+                    withAnimation(.easeOut(duration: 0.15)) { proxy.scrollTo(last.id, anchor: .bottom) }
+                }
+            }
+        }
+    }
+
+    private var footer: some View {
+        HStack {
+            Toggle("Автопрокрутка", isOn: $autoscroll)
+                .toggleStyle(.checkbox)
+                .controlSize(.small)
+            Spacer()
+            Text("Логируются действия пользователя, сбои SSH, переходы online/offline и события конфига.")
+                .font(.caption)
+                .foregroundColor(.secondary)
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 6)
+    }
+}
+
+private struct LogRow: View {
+    let entry: LogEntry
+
+    var body: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 7) {
+            Text(entry.time)
+                .font(.system(size: 11, design: .monospaced))
+                .foregroundColor(.secondary)
+                .frame(width: 54, alignment: .leading)
+            Circle()
+                .fill(dotColor)
+                .frame(width: 7, height: 7)
+            Text(entry.message)
+                .font(.system(size: 11, design: .monospaced))
+                .foregroundColor(textColor)
+            Spacer(minLength: 0)
+            if !entry.source.isEmpty {
+                Text(entry.source)
+                    .font(.system(size: 10, design: .monospaced))
+                    .foregroundColor(.secondary)
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 1)
+                    .background(Color.secondary.opacity(0.14))
+                    .clipShape(Capsule())
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.horizontal, 6)
+        .padding(.vertical, 3)
+        .background(highlight.opacity(entry.level == .info ? 0 : 0.5))
+        .clipShape(RoundedRectangle(cornerRadius: 5))
+    }
+
+    private var dotColor: Color {
+        switch entry.level {
+        case .info: return Color.secondary
+        case .warn: return LevelColor.warning
+        case .error: return LevelColor.critical
+        }
+    }
+    private var textColor: Color {
+        entry.level == .error ? LevelColor.critical : .primary
+    }
+    private var highlight: Color {
+        entry.level == .error ? LevelColor.critical.opacity(0.16) : LevelColor.warning.opacity(0.16)
+    }
+}
+
+// MARK: - Копирование карточки в Markdown
+
+/// Собирает markdown-представление карточки хоста: всё видимое на экране
+/// + строку подключения + фактические цифры CPU/RAM.
+private enum HostCardMarkdown {
+    static func build(_ s: HostSnapshot) -> String {
+        let title = (s.hostname?.isEmpty == false) ? s.hostname! : s.host.name
+        let status: String
+        switch s.status {
+        case .online: status = "🟢 онлайн"
+        case .offline: status = "🔴 offline"
+        case .pending: status = "🟡 ожидание"
+        }
+        let ping = s.pingMs.map { "\(Int($0.rounded())) мс" } ?? "—"
+        let osName: String
+        switch s.os {
+        case .macos: osName = "macOS"
+        case .linux: osName = "Linux"
+        case .unknown: osName = "—"
+        }
+
+        let cores = s.cores.map(String.init) ?? "—"
+        let ramTotal = Format.gb(s.ramTotal)
+        let ramUsed = s.ramUsed.map { Format.gb($0) } ?? "—"
+        let ramPct = s.ramUsedPct.map { "\(Int($0.rounded()))%" } ?? "—"
+        let disk = Format.gb(s.diskTotal)
+        let kind = s.diskKind?.uppercased() ?? "—"
+        let uptime = s.uptimeText ?? "—"
+        let tempC = s.tempC.map { "\(Int($0.rounded()))°C" } ?? "—"
+        let tempB = s.tempBoardC.map { "\(Int($0.rounded()))°C" } ?? "—"
+        let cpu = s.cpuPct.map { "\(Int($0.rounded()))%" } ?? "—"
+        let net = "\(linkText(s)) ↑\(Format.bytesPerSecond(s.netUp)) ↓\(Format.bytesPerSecond(s.netDown))"
+        let io = "R \(Format.bytesPerSecond(s.diskRead)) · W \(Format.bytesPerSecond(s.diskWrite))"
+
+        var lines: [String] = []
+        lines.append("### \(title)  ·  \(status)  ·  ping \(ping)")
+        lines.append("")
+        lines.append("- **Подключение:** `ssh \(s.host.ssh)`")
+        lines.append("- **Хост:** \(osName) · \(cores) Cores · RAM \(ramUsed)/\(ramTotal) (\(ramPct)) · Диск \(kind) \(disk)")
+        lines.append("- **Нагрузка:** CPU **\(cpu)** · RAM **\(ramPct)**")
+        lines.append("- **Uptime:** \(uptime) · Температура: CPU \(tempC) / Плата \(tempB)")
+        lines.append("- **Сеть:** \(net)")
+        lines.append("- **Диск I/O:** \(io)")
+        var meta: [String] = []
+        if let g = s.host.group, !g.isEmpty { meta.append("группа «\(g)»") }
+        if !s.host.tags.isEmpty { meta.append("теги: \(s.host.tags.joined(separator: ", "))") }
+        if !meta.isEmpty { lines.append("- \(meta.joined(separator: " · "))") }
+        return lines.joined(separator: "\n")
+    }
+
+    private static func linkText(_ s: HostSnapshot) -> String {
+        guard let m = s.linkMbps else { return "—" }
+        if m >= 1000 {
+            if m % 1000 == 0 { return "\(m / 1000)G" }
+            return String(format: "%.1fG", Double(m) / 1000.0)
+        }
+        return "\(m)M"
+    }
 }

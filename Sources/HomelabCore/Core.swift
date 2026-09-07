@@ -205,37 +205,6 @@ public enum CommandBatch {
     }
 }
 
-// MARK: - Отсчёт быстрых кликов (альтернатива двойному клику)
-
-/// Считает N кликов в быстрой последовательности: если пауза между двумя кликами
-/// превышает `window`, счётчик сбрасывается. Когда набрано `threshold` кликов подряд —
-/// сигнализирует и сбрасывается. Используется для «удалить карточку по 4 кликам».
-public struct ClickCounter {
-    public var window: TimeInterval
-    public var threshold: Int
-    private(set) public var count = 0
-    private var last: Date?
-
-    public init(window: TimeInterval = 0.5, threshold: Int = 4) {
-        self.window = window
-        self.threshold = threshold
-    }
-
-    /// Регистрирует клик; `true` — когда подряд набрано `threshold` кликов в пределах `window`.
-    public mutating func register(at now: Date = Date()) -> Bool {
-        if let l = last, now.timeIntervalSince(l) > window {
-            count = 0
-        }
-        count += 1
-        last = now
-        if count >= threshold {
-            count = 0
-            return true
-        }
-        return false
-    }
-}
-
 // MARK: - Утилиты форматирования
 
 public enum Format {

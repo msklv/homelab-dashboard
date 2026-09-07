@@ -189,31 +189,6 @@ struct MockExecutor: CommandExecuting {
     }
 }
 
-func testClickCounter() {
-    print("-- ClickCounter --")
-    var t = Date(timeIntervalSince1970: 0)
-    var cc = ClickCounter(window: 0.5, threshold: 4)
-    // 4 быстрых клика подряд - триггер
-    ok(!cc.register(at: t), "клик 1 не триггер")
-    ok(!cc.register(at: t.addingTimeInterval(0.1)), "клик 2 не триггер")
-    ok(!cc.register(at: t.addingTimeInterval(0.2)), "клик 3 не триггер")
-    ok(cc.register(at: t.addingTimeInterval(0.3)), "клик 4 подряд - триггер")
-
-    // пауза дольше окна сбрасывает счёт
-    var slow = ClickCounter(window: 0.5, threshold: 4)
-    _ = slow.register(at: Date(timeIntervalSince1970: 100))
-    _ = slow.register(at: Date(timeIntervalSince1970: 101)) // gap 1s > 0.5 -> reset, count=1
-    ok(!slow.register(at: Date(timeIntervalSince1970: 101.2)), "после сброса клик 2 не триггер")
-    ok(!slow.register(at: Date(timeIntervalSince1970: 101.3)), "клик 3 не триггер")
-    ok(slow.register(at: Date(timeIntervalSince1970: 101.4)), "клик 4 быстро подряд - триггер")
-
-    // count сбрасывается после триггера
-    var nxt = ClickCounter(window: 0.5, threshold: 2)
-    _ = nxt.register(at: Date(timeIntervalSince1970: 10))
-    ok(nxt.register(at: Date(timeIntervalSince1970: 10.1)), "2-й клик триггер")
-    ok(!nxt.register(at: Date(timeIntervalSince1970: 10.2)), "после триггера счёт пуст")
-}
-
 func testPoller() {
     print("-- Poller --")
     let okOut = """
@@ -366,7 +341,6 @@ do {
     try testSampleEngine()
     testPoller()
     testWatcher()
-    testClickCounter()
 
     print("\n=== \(total - failures.count)/\(total) passed ===")
     if failures.isEmpty {
