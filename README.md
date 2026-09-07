@@ -1,48 +1,54 @@
 # homelab-dashboard
 
 Нативный macOS-дашборд (Apple Silicon / ARM) для мониторинга Linux и macOS-серверов по SSH:
-живые метрики, группы, цветные теги, светлая/тёмная тема, YAML-конфиг с hot-reload.
-Ноль зависимостей, кроме Yams.
+живые метрики, группы, цветные теги, светлая/тёмная тема, YAML-конфиг с hot-reload. **Ноль внешних зависимостей.**
 
 A native macOS (Apple Silicon) SSH-based dashboard for monitoring your Linux and macOS servers:
 live metrics, groups, colored tags, light/dark theme, and a YAML config with instant hot-reload.
-Only one dependency (Yams) on top of the system SSH/Ping and SwiftUI.
+**Zero external dependencies** — own YAML parser and test runner, system SSH/Ping only.
 
 ## Особенности / Features
 
-- Live pull-мониторинг по SSH (без агентов на серверах)
-- Метрики: статус, ping, cores, RAM, диск, uptime, температура, CPU %, RAM %, сеть ↑/↓, диск I/O R/W
+- Live pull-мониторинг по SSH (на серверах ничего не устанавливается)
+- Метрики: статус, ping, cores, RAM, диск (тип + объём), uptime, температура, CPU %, RAM %, сеть ↑/↓, диск I/O R/W
+- Бейджи: аплинк (100/1G/2.5G/10G) и тип диска (nvme/ssd/hdd)
 - Сводка: Итого / Онлайн / Оффлайн
-- Группы (секции) и цветные теги-фильтры
+- Группы (секции) и цветные теги-фильтры; правый клик / drag-and-drop для группировки
 - Светлая / тёмная тема (system | light | dark)
-- YAML-конфиг с мгновенным hot-reload
-- Только ARM (Apple Silicon), минимальные зависимости
+- YAML-конфиг с мгновенным hot-reload; быстрые клики для удаления хоста; кнопка терминала `›_`
+- Только ARM (Apple Silicon), ноль внешних зависимостей
 
 ## Требования / Requirements
 
-- macOS 12+
+- macOS 13+
 - Apple Silicon (arm64)
-- `ssh` и `ping` доступны из консоли; серверы авторизованы через `~/.ssh` (ключи / config)
+- `ssh` и `ping` из консоли; серверы авторизованы через `~/.ssh` (ключи / config)
 
 ## Сборка / Build
 
 ```sh
-# Xcode project + Swift Package
-open homelab-dashboard.xcodeproj
+swift build            # debug build
+swift run Check        # self-contained test runner (без XCTest)
+swift build -c release # release build
+```
+
+## Запуск / Run
+
+```sh
+HOMELAB_CONFIG=/path/config.yaml .build/release/Dashboard
+# по умолчанию: ~/.config/homelab-dashboard/config.yaml
 ```
 
 ## Конфигурация / Configuration
 
-См. `SPEC.md` (раздел 4) и пример в `config.example.yaml`.
-
-```
-config: ~/.config/homelab-dashboard/config.yaml
-```
+Пример: `config.example.yaml` (заглушки). Обязательны только `name` и `ssh`; ОС определяется
+автоматически, метрики собираются все, недоступные — `N/A`. Реальные адреса — только в приватном
+`config.yaml` (в `.gitignore`), в публичный репозиторий не попадают.
 
 ## Спецификация
 
-Полное описание устройства: **`SPEC.md`** (архитектура, схема YAML, пары команд сбора,
-спецификация UI, цветовая семантика порогов, hot-reload, безопасность).
+Полное описание устройства: **`SPEC.md`** (архитектура, схема YAML, команды сбора, UI,
+цветовая семантика порогов, hot-reload, безопасность).
 
 ## Лицензия / License
 

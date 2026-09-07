@@ -1,0 +1,11 @@
+# сборка / локальное
+.build/
+.swiftpm/
+.DS_Store
+
+# приватный конфиг с реальными хостами — НЕ публикуем
+config.yaml
+
+# Xcode
+*.xcodeproj/xcuserdata/
+xcuserdata/

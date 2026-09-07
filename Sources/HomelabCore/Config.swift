@@ -1,0 +1,188 @@
+import Foundation
+
+public enum HostOS: String, Sendable {
+    case linux, macos, unknown
+}
+
+public enum ThemeMode: String, Sendable {
+    case system, light, dark
+}
+
+public struct Thresholds: Equatable, Sendable {
+    public var warning: Int
+    public var critical: Int
+    public static let `default` = Thresholds(warning: 60, critical: 85)
+}
+
+public struct TagDef: Equatable, Sendable {
+    public var name: String
+    public var color: String
+    public init(name: String, color: String) {
+        self.name = name
+        self.color = color
+    }
+}
+
+public struct HostConfig: Equatable, Sendable {
+    public var name: String
+    public var ssh: String
+    /// Необязательное поле: секция-группа. Если пусто — хост попадёт в «Прочее».
+    public var group: String?
+    /// Необязательное поле: теги для фильтрации (описаны в блоке `tags`).
+    public var tags: [String] = []
+    public var pollInterval: Int?
+    public var timeout: Int?
+
+    public init() { name = ""; ssh = "" }
+
+    public init(name: String, ssh: String, group: String? = nil,
+                tags: [String] = [], pollInterval: Int? = nil, timeout: Int? = nil) {
+        self.name = name
+        self.ssh = ssh
+        self.group = group
+        self.tags = tags
+        self.pollInterval = pollInterval
+        self.timeout = timeout
+    }
+
+    /// Хост для ping: часть строки ssh до последнего '@'.
+    public var pingHost: String {
+        if let at = ssh.lastIndex(of: "@") {
+            return String(ssh[ssh.index(after: at)...])
+        }
+        return ssh
+    }
+}
+
+public struct Config: Equatable, Sendable {
+    public var pollInterval: Int = 5
+    public var timeout: Int = 5
+    public var offlineAfterMisses: Int = 2
+    public var maxConcurrent: Int = 4
+    public var theme: ThemeMode = .system
+    public var thresholds: Thresholds = .default
+    public var groups: [String] = []
+    public var tags: [TagDef] = []
+    public var hosts: [HostConfig] = []
+
+    public init() {}
+
+    /// Интервал опроса для конкретного хоста (переопределение) либо глобальный.
+    public func interval(for host: HostConfig) -> Int {
+        host.pollInterval ?? pollInterval
+    }
+
+    public func timeout(for host: HostConfig) -> Int {
+        host.timeout ?? timeout
+    }
+
+    public var unknownGroupName: String { "Прочее" }
+
+    public var groupsWithUngrouped: [String] {
+        var g = groups
+        if hosts.contains(where: { $0.group == nil || ($0.group ?? "").isEmpty }) {
+            if !g.contains(unknownGroupName) { g.append(unknownGroupName) }
+        }
+        return g
+    }
+
+    /// Сериализация конфига обратно в YAML — для сохранения изменений в файл.
+    public var yaml: String {
+        var o = "# homelab-dashboard config\n"
+        o += "poll_interval: \(pollInterval)\n"
+        o += "timeout: \(timeout)\n"
+        o += "offline_after_misses: \(offlineAfterMisses)\n"
+        o += "max_concurrent: \(maxConcurrent)\n"
+        o += "theme: \(theme.rawValue)\n\n"
+        o += "thresholds:\n  warning: \(thresholds.warning)\n  critical: \(thresholds.critical)\n\n"
+        if !groups.isEmpty {
+            o += "groups:\n"
+            for g in groups { o += "  - name: \(g)\n" }
+            o += "\n"
+        }
+        if !tags.isEmpty {
+            o += "tags:\n"
+            for t in tags { o += "  - { name: \(t.name), color: \(t.color) }\n" }
+            o += "\n"
+        }
+        o += "hosts:\n"
+        for h in hosts {
+            o += "  - name: \(h.name)\n    ssh: \(h.ssh)\n"
+            if let g = h.group, !g.isEmpty { o += "    group: \(g)\n" }
+            if !h.tags.isEmpty { o += "    tags: [\(h.tags.joined(separator: ", "))]\n" }
+            if let p = h.pollInterval { o += "    poll_interval: \(p)\n" }
+            if let t = h.timeout { o += "    timeout: \(t)\n" }
+        }
+        return o
+    }
+}
+
+public enum ConfigError: Error, LocalizedError {
+    case missingRequiredHostField(String, String)
+
+    public var errorDescription: String? {
+        switch self {
+        case .missingRequiredHostField(let field, let host):
+            return "Host \(host): обязательное поле '\(field)' отсутствует"
+        }
+    }
+}
+
+public extension Config {
+    /// Стандартный путь к конфигу (переопределяется env HOMELAB_CONFIG или аргументом).
+    static func defaultPath() -> String {
+        if let p = ProcessInfo.processInfo.environment["HOMELAB_CONFIG"], !p.isEmpty { return p }
+        if let idx = CommandLine.arguments.firstIndex(of: "HOMELAB_CONFIG") {
+            let v = CommandLine.arguments[idx + 1]
+            if !v.isEmpty { return v }
+        }
+        let home = FileManager.default.homeDirectoryForCurrentUser
+        return home.appendingPathComponent(".config/homelab-dashboard/config.yaml").path
+    }
+
+    static func parse(_ yamlText: String) throws -> Config {
+        let doc = try YamlMini.parseDocument(yamlText)
+        let root = doc.map ?? [:]
+
+        var c = Config()
+        c.pollInterval = root["poll_interval"]?.int ?? c.pollInterval
+        c.timeout = root["timeout"]?.int ?? c.timeout
+        c.offlineAfterMisses = root["offline_after_misses"]?.int ?? c.offlineAfterMisses
+        c.maxConcurrent = root["max_concurrent"]?.int ?? c.maxConcurrent
+        if let themeStr = root["theme"]?.string, let t = ThemeMode(rawValue: themeStr) { c.theme = t }
+
+        if let th = root["thresholds"]?.map {
+            c.thresholds.warning = th["warning"]?.int ?? c.thresholds.warning
+            c.thresholds.critical = th["critical"]?.int ?? c.thresholds.critical
+        }
+
+        c.groups = root["groups"]?.array?.compactMap { $0.map?["name"]?.string } ?? []
+        c.tags = root["tags"]?.array?.compactMap { v -> TagDef? in
+            guard let m = v.map, let n = m["name"]?.string else { return nil }
+            return TagDef(name: n, color: m["color"]?.string ?? "gray")
+        } ?? []
+
+        if let hostsArr = root["hosts"]?.array {
+            c.hosts = try hostsArr.compactMap { v -> HostConfig? in
+                guard let m = v.map,
+                      let name = m["name"]?.string,
+                      let ssh = m["ssh"]?.string else {
+                    let nm = v.map?["name"]?.string ?? "?"
+                    throw ConfigError.missingRequiredHostField("name/ssh", nm)
+                }
+                var h = HostConfig(name: name, ssh: ssh)
+                h.group = m["group"]?.string
+                h.tags = m["tags"]?.stringArray() ?? []
+                h.pollInterval = m["poll_interval"]?.int
+                h.timeout = m["timeout"]?.int
+                return h
+            }
+        }
+        return c
+    }
+
+    static func load(from path: String) throws -> Config {
+        let text = try String(contentsOfFile: path, encoding: .utf8)
+        return try parse(text)
+    }
+}

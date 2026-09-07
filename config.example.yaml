@@ -1,36 +1,33 @@
-poll_interval: 5          # ОПЦИОНАЛЬНО: период обновления, сек (по умолчанию 5). Можно не указывать.
+poll_interval: 5          # ОПЦИОНАЛЬНО: период обновления, сек (по умолчанию 5).
 timeout: 5
 offline_after_misses: 2
 max_concurrent: 4
 theme: system
 
 thresholds:
-  warning: 60
-  critical: 85
+  warning: 60             # % — порог оранжевый (warning)
+  critical: 85            # % — порог красный (critical)
 
-groups:
+groups:                   # ОПЦИОНАЛЬНО: объявление секций-групп
   - name: Кластер k8s
   - name: NAS / storage
 
-tags:
+tags:                     # ОПЦИОНАЛЬНО: цветные теги-фильтры
   - { name: prod, color: green }
   - { name: backup, color: blue }
   - { name: critical, color: red }
 
 hosts:
+  # Обязательны только name и ssh. ОС (Linux/macOS) определяется автоматически,
+  # метрики собираются все — что недоступно на конкретной ОС показывается как N/A.
+  # На сервере ничего не устанавливается.
   - name: k8s-01
-    ssh: root@192.168.3.10   # пример; замените на свои реальные доступы
-    os: linux
-    group: Кластер k8s
-    tags: [prod, critical]
-    region: ru
-    metrics: { cores: true, ram: true, disk: true, temp: true, net: true, iostat: true }
+    ssh: root@192.168.1.10   # замените на свои реальные доступы
+    group: Кластер k8s       # ОПЦИОНАЛЬНО: секция-группа (если пусто — «Прочее»)
+    tags: [prod, critical]   # ОПЦИОНАЛЬНО: теги-фильтры
 
   - name: mac-mini
-    ssh: user@192.168.3.15
-    os: macos
+    ssh: user@192.168.1.15
     poll_interval: 10        # ОПЦИОНАЛЬНО: редкий хост — свой период обновления
     group: NAS / storage
     tags: [backup]
-    region: ru
-    metrics: { cores: true, ram: true, disk: true, temp: false, net: true, iostat: false }

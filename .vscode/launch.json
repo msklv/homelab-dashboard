@@ -1,0 +1,44 @@
+{
+    "configurations": [
+        {
+            "type": "swift",
+            "request": "launch",
+            "args": [],
+            "cwd": "${workspaceFolder:homelab-dashboard}",
+            "name": "Debug Dashboard",
+            "target": "Dashboard",
+            "configuration": "debug",
+            "preLaunchTask": "swift: Build Debug Dashboard"
+        },
+        {
+            "type": "swift",
+            "request": "launch",
+            "args": [],
+            "cwd": "${workspaceFolder:homelab-dashboard}",
+            "name": "Release Dashboard",
+            "target": "Dashboard",
+            "configuration": "release",
+            "preLaunchTask": "swift: Build Release Dashboard"
+        },
+        {
+            "type": "swift",
+            "request": "launch",
+            "args": [],
+            "cwd": "${workspaceFolder:homelab-dashboard}",
+            "name": "Debug Check",
+            "target": "Check",
+            "configuration": "debug",
+            "preLaunchTask": "swift: Build Debug Check"
+        },
+        {
+            "type": "swift",
+            "request": "launch",
+            "args": [],
+            "cwd": "${workspaceFolder:homelab-dashboard}",
+            "name": "Release Check",
+            "target": "Check",
+            "configuration": "release",
+            "preLaunchTask": "swift: Build Release Check"
+        }
+    ]
+}
