@@ -1,4 +1,4 @@
-poll_interval: 5
+poll_interval: 5          # ОПЦИОНАЛЬНО: период обновления, сек (по умолчанию 5). Можно не указывать.
 timeout: 5
 offline_after_misses: 2
 max_concurrent: 4
@@ -29,6 +29,7 @@ hosts:
   - name: mac-mini
     ssh: user@192.168.3.15
     os: macos
+    poll_interval: 10        # ОПЦИОНАЛЬНО: редкий хост — свой период обновления
     group: NAS / storage
     tags: [backup]
     region: ru
