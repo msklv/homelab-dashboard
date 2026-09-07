@@ -166,7 +166,7 @@ public enum CommandBatch {
             "echo HL_CORES=$(sysctl -n hw.ncpu)",
             "boot=$(sysctl -n kern.boottime | awk -F'[,=]' '{gsub(/[^0-9]/,\"\",$2); print $2}'); u=$(( $(date +%s) - boot )); echo HL_UPTIME=$u",
             "total=$(sysctl -n hw.memsize); ps=$(sysctl -n hw.pagesize)",
-            "free=$(vm_stat | awk '/Pages free/{print $3}' | tr -d '.'); fb=$(vm_stat | awk '/File-backed pages/{print $3}' | tr -d '.'); used=$(( ( (total/ps) - free - fb ) * ps )); echo HL_MEM_TOTAL=$total; echo HL_MEM_USED=$used",
+            "act=$(vm_stat | awk '/Pages active/{print $3}' | tr -d '.'); ina=$(vm_stat | awk '/Pages inactive/{print $3}' | tr -d '.'); spec=$(vm_stat | awk '/Pages speculative/{print $3}' | tr -d '.'); fb=$(vm_stat | awk '/File-backed pages/{print $3}' | tr -d '.'); wd=$(vm_stat | awk '/Pages wired down/{print $4}' | tr -d '.'); oc=$(vm_stat | awk '/Pages occupied by compressor/{print $5}' | tr -d '.'); used=$(( ( (act+ina+spec-fb) + wd + oc ) * ps )); echo HL_MEM_TOTAL=$total; echo HL_MEM_USED=$used",
             // Объём физических внутренних дисков (без NFS/сетевых и без задвоения APFS-слайсов).
             "echo HL_DISK_TOTAL=$(df -b 1 / 2>/dev/null | tail -1 | awk '{print $2*512}')",
             "bootproto=$(diskutil info / | awk -F: '/Protocol/{gsub(/ /,\"\",$2); print toupper($2)}'); case \"$bootproto\" in *SATA*) echo HL_DISKKIND=ssd;; *) echo HL_DISKKIND=nvme;; esac",

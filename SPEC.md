@@ -120,7 +120,7 @@ hosts:
 | CPU % | `top -bn1` `%Cpu` (100−idle) | `top -l 1` «CPU usage» | живое |
 | Cores | `nproc` | `sysctl -n hw.ncpu` | статично |
 | RAM total | `/proc/meminfo` MemTotal×1024 | `sysctl -n hw.memsize` | статично |
-| RAM used % | `(MemTotal−MemAvailable)/MemTotal` | **total − free − file-backed** (по `vm_stat`) | как в Activity Monitor |
+| RAM used % | `(MemTotal−MemAvailable)/MemTotal` | **(active+inactive+spec − file-backed) + wired + compressor** (по `vm_stat`) | как Activity Monitor: App+Wired+Compressed |
 | Disk total | **корневой раздел** `df -B1 /` | **корневой раздел** `df -b 1 /` ×512 (APFS-контейнер) | десятичные GB |
 | Disk kind | `lsblk -dbrno name,type,rota`, приоритет **nvme>ssd>hdd** | `diskutil info /` Protocol → nvme/ssd | бейдж типа диска |
 | Uptime | `/proc/uptime` | `sysctl kern.boottime` | сек → «Xd Yh» |
