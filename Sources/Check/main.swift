@@ -132,6 +132,36 @@ func testCpuTopParse() {
     close(idle("Cpu(s):  91.8 us,  0.0 sy,  0.0 ni,  8.2 id,  0.0 wa,  0.0 hi,  0.0 si,  0.0 st") ?? -1, 91.8, "legacy Cpu(s): (no %) -> 100-idle", 0.05)
 }
 
+func testMacNetParse() {
+    print("-- macOS netstat RX/TX parser (regression) --")
+    // достаём из mac-батча реальный awk для HL_NET_RX (и TX — тот же скрипт)
+    let batch = CommandBatch.build(for: HostConfig(name: "mac-dev", ssh: "u@h"))
+    func netAwk(_ marker: String) -> String? {
+        guard let m = batch.range(of: marker)?.upperBound,
+              let x = batch[m...].firstIndex(of: "'") else { return nil }
+        return String(batch[m..<x])
+    }
+    guard let rxProg = netAwk("echo HL_NET_RX=$(netstat -ib | awk '"),
+          let txProg = netAwk("echo HL_NET_TX=$(netstat -ib | awk '") else {
+        ok(false, "awk net RX/TX есть в mac-батче")
+        return
+    }
+    let lines = [
+        "Name       Mtu   Network       Address            Ipkts Ierrs     Ibytes    Opkts Oerrs     Obytes  Coll",
+        "lo0        16384 <Link#1>                      1000     0      5000      1000     0      6000      0",
+        "lo0        16384 127           localhost       1000     -      5000      1000     -      6000      -",
+        "en0        1500  <Link#5>     c6:0f:ad:11:bb:a5  1000     0     1000000     500     0     2000000    0",
+        "en0        1500  192.168.3     192.168.3.89    1000     -     1000000     500     -     2000000    -",
+        "en0        1500  fe80:e::14e2   fe80::14e2:1469  1000     -     1000000     500     -     2000000    -",
+    ]
+    let quoted = lines.map { "'" + $0 + "'" }.joined(separator: " ")
+    let srx = "printf '%s\\n' " + quoted + " | awk '" + rxProg + "'"
+    let stx = "printf '%s\\n' " + quoted + " | awk '" + txProg + "'"
+    guard let rx = shell(srx), let tx = shell(stx) else { ok(false, "awk net выполнился"); return }
+    eq(rx, "1000000", "RX: dedupe по link-строке (одно значение на интерфейс)")
+    eq(tx, "2000000", "TX: колонка $10 (Obytes), не $12")
+}
+
 // MARK: - SampleEngine
 
 func testSampleEngine() throws {
@@ -446,6 +476,7 @@ do {
     try testYamlRoundTrip()
     testCommands()
     testCpuTopParse()
+    testMacNetParse()
     testSshPort()
     try testSampleEngine()
     testPoller()

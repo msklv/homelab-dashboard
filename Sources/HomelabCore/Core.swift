@@ -175,8 +175,11 @@ public enum CommandBatch {
             "echo HL_TEMP_BOARD=",
             // Самая быстрая медиа-скорость активного проводного аплинка (напр. 100baseT→100, 1000baseT→1000).
             "echo HL_LINK=$(ifconfig -l | tr ' ' '\\n' | grep -E '^(en|eth|wl|enx)' | while read i; do ifconfig $i 2>/dev/null | grep -oE '[0-9]{3,5}baseT' | head -1 | tr -d 'baseT'; done | sort -n | tail -1)",
-            "echo HL_NET_RX=$(netstat -ib | awk 'NR>1{rx+=$7; tx+=$12} END{print rx+0}')",
-            "echo HL_NET_TX=$(netstat -ib | awk 'NR>1{rx+=$7; tx+=$12} END{print tx+0}')",
+            // Net RX/TX: суммируем ТОЛЬКО link-слой (по одной строке на интерфейс, иначе
+            // интерфейс с несколькими IP/en0 с IPv6 задваивает счётчики в N раз) и только
+            // физические en*/eth*. Колонки netstat -ib: $7=Ibytes(RX), $10=Obytes(TX) (не $12).
+            "echo HL_NET_RX=$(netstat -ib | awk '$3 ~ /^<Link/ && $1 ~ /^(en|enx|eth|enP)/ {rx+=$7; tx+=$10} END{print rx+0}')",
+            "echo HL_NET_TX=$(netstat -ib | awk '$3 ~ /^<Link/ && $1 ~ /^(en|enx|eth|enP)/ {rx+=$7; tx+=$10} END{print tx+0}')",
             "echo HL_CPU=$(top -l 1 -n 0 | awk '/CPU usage/{gsub(/%/,\"\",$7); print 100-$7; exit}')",
             "io=$(iostat -w 1 -c 2 2>/dev/null | awk '/disk[0-9]/&&NF<6{for(i=1;i<=NF;i++){if($i~/^disk[0-9]/)nd++}} /^[[:space:]]*[0-9]/{for(i=3;i<=3*nd;i+=3){s+=$i}} END{print int(s*1048576)}'); echo HL_DISK_R=$io",
             "echo HL_DISK_W=",
