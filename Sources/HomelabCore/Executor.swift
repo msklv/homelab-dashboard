@@ -84,6 +84,24 @@ public struct SshRunner {
                 "-o", "StrictHostKeyChecking=accept-new",
                 "-o", "LogLevel=ERROR",
             ]
+            // Джамп-форма `user:alias@host[:port]`: user-часть (до последнего `@`)
+            // содержит `:`. Destination `user:alias@host` c двоеточием в username ssh
+            // разбирает как user="admin:worker-3" (проверено ssh -G) и не подключится.
+            // Добраться до VM за бастионом пробрасываем через ProxyJump:
+            //   ssh -J user@bastion:PORT user@alias.
+            if let at = target.lastIndex(of: "@"), target[..<at].contains(":") {
+                let userAlias = String(target[..<at])            // user:alias
+                let bastion = String(target[target.index(after: at)...])
+                let c = userAlias.firstIndex(of: ":")!
+                let user = String(userAlias[..<c])
+                let alias = String(userAlias[userAlias.index(after: c)...])
+                if !alias.isEmpty {
+                    var jump = user + "@" + bastion
+                    if let port { jump += ":\(port)" }
+                    argv += ["-J", jump, user + "@" + alias, batch]
+                    return executor.run(argv)
+                }
+            }
             if let port { argv += ["-p", "\(port)"] }
             argv += [target, batch]
             return executor.run(argv)

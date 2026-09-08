@@ -463,6 +463,21 @@ func testQuickAdd() {
     ok(QuickAdd.parse("@host", currentUser: u)?.name == "host", "@host collapses to name=host")
     ok(QuickAdd.parse("  user@h  ", currentUser: u) != nil, "trims surrounding whitespace")
 
+    // ssh-cli стиль: ssh 'user:alias@host' -p PORT / ssh 'host' -p PORT / кавычки без ssh / малформированный
+    let s1 = QuickAdd.parse("ssh 'admin:worker-3@bastion.example.com' -p 2222", currentUser: u)
+    ok(s1?.name == "worker-3" && s1?.ssh == "admin:worker-3@bastion.example.com:2222",
+       "ssh 'user:alias@host' -p PORT -> alias name + host:port")
+    let s2 = QuickAdd.parse("ssh 'bastion.example.com' -p 2222", currentUser: "me")
+    ok(s2?.name == "bastion.example.com" && s2?.ssh == "me@bastion.example.com:2222",
+       "ssh 'bare host' -p PORT -> currentUser@host:port")
+    let s3 = QuickAdd.parse("ssh deploy:vm-02@h -p 23", currentUser: u)
+    ok(s3?.name == "vm-02" && s3?.ssh == "deploy:vm-02@h:23", "ssh user:alias@host -p PORT без кавычек")
+    let s4 = QuickAdd.parse("'user@host:2222'", currentUser: "me")
+    ok(s4?.name == "host" && s4?.ssh == "user@host:2222", "кавычки без ssh: inline :port сохраняется")
+    ok(QuickAdd.parse("ssh '' -p 22", currentUser: u) == nil, "пустой адрес в кавычках -> nil")
+    ok(QuickAdd.parse("ssh x@h -p 70000", currentUser: u) == nil, "порт >65535 -> nil")
+    ok(QuickAdd.parse("ssh 'x@h' -p abc", currentUser: u) == nil, "нечисловой порт -> nil")
+
     var cfg = Config()
     cfg.hosts = [HostConfig(name: "a", ssh: "u@h")]
     var c2 = cfg
@@ -577,6 +592,26 @@ func testSshPort() {
     let argv = rec.rec.calls.first ?? ""
     ok(argv.contains("-p") && argv.contains("2222"), "ssh argv has -p 2222")
     ok(!argv.contains("user@h:2222"), "argv target has no :port (invalid ssh syntax)")
+
+    // джамп-форма user:alias@host[:port] -> -J user@bastion:port + user@alias
+    let recJ = RecordingExecutor(result: ExecResult(exitCode: 0, stdout: ""))
+    SshRunner(executor: recJ).run(HostConfig(name: "w", ssh: "admin:worker-3@bastion.example.com:2222"),
+                                  timeout: 5, batch: "echo hi")
+    let aJ = recJ.rec.calls.first ?? ""
+    ok(aJ.contains("-J") && aJ.contains("admin@bastion.example.com:2222") && aJ.contains("admin@worker-3"),
+       "jump: -J user@bastion:port + user@alias")
+    ok(!aJ.contains("admin:worker-3@bastion"), "jump: colon-target не уходит в destination")
+    let recJ2 = RecordingExecutor(result: ExecResult(exitCode: 0, stdout: ""))
+    SshRunner(executor: recJ2).run(HostConfig(name: "w", ssh: "deploy:vm-02@h"), timeout: 5, batch: "echo hi")
+    let aJ2 = recJ2.rec.calls.first ?? ""
+    ok(aJ2.contains("-J") && aJ2.contains("deploy@h") && aJ2.contains("deploy@vm-02"), "jump без порта: -J user@bastion + user@alias")
+    // plain user@host[:port] (нет двоеточия в user-части) — без -J
+    let recP = RecordingExecutor(result: ExecResult(exitCode: 0, stdout: ""))
+    SshRunner(executor: recP).run(HostConfig(name: "h", ssh: "admin@bastion.example.com:2222"),
+                                  timeout: 5, batch: "echo hi")
+    let aP = recP.rec.calls.first ?? ""
+    ok(aP.contains("admin@bastion.example.com") && aP.contains("2222") && !aP.contains("-J"),
+       "plain user@host[:port]: без -J, destination user@host + -p port")
 }
 
 // MARK: - main

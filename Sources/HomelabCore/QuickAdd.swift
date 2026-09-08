@@ -18,6 +18,10 @@ public enum QuickAdd {
     /// Имя можно задать явно префиксом `имя=address` (напр. `vm2=user@h:2222`).
     /// Для джамп-хостов вида `user:alias@host` имя по умолчанию берётся из `alias`
     /// (это реальная VM за бастионом), а не из host-части (бастион).
+    ///
+    /// Поддерживается и ssh-cli стиль: `ssh 'user:alias@host' -p PORT`,
+    /// `ssh user@host -p PORT`, `'user@host:2222'` — нормализуется в
+    /// `user:alias@host:PORT` (порт переводится в `@host:PORT`).
     public static func parse(_ raw: String, currentUser: String) -> Dest? {
         var forcedName: String?
         var s = raw.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -27,6 +31,14 @@ public enum QuickAdd {
             if !lhs.isEmpty, !rest.isEmpty { forcedName = lhs; s = rest }
         }
         guard !s.isEmpty else { return nil }
+        // ssh-cli форма: `ssh '…' -p PORT`, `ssh host -p PORT`, `'user@host:2222'`.
+        // Если строка ведома ssh/кавычкой — нормализация обязана удаться, иначе адрес
+        // малформирован (nil, без провала в старый путь, который мог бы изуродовать строку).
+        let firstTok = s.prefix(while: { !$0.isWhitespace })
+        if firstTok == "ssh" || firstTok.first == "'" || firstTok.first == "\"" {
+            guard let n = normalizeSshCli(s) else { return nil }
+            s = n
+        }
         var name: String
         var ssh: String
         if let at = s.firstIndex(of: "@") {
@@ -45,6 +57,61 @@ public enum QuickAdd {
         if let f = forcedName { name = f }
         guard !name.isEmpty else { return nil }
         return Dest(name: name, ssh: ssh)
+    }
+
+    /// Приводит ssh-cli стиль к каноническому адресу `key@host[:port]`:
+    /// `ssh 'user:alias@host' -p PORT`, `ssh user@host -p PORT`, `'user@host:2222'`.
+    /// Возвращает nil, если строка не похожа на ssh-cli (тогда parse идёт старым путём).
+    private static func normalizeSshCli(_ raw: String) -> String? {
+        var rest = raw
+        let head = rest.prefix(while: { !$0.isWhitespace })
+        if head == "ssh" {
+            rest = String(rest.dropFirst(head.count)).trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        guard !rest.isEmpty else { return nil }
+
+        // адрес: в кавычках ('…'/"…") — иначе до флага -p/-P, иначе весь остаток (только если был "ssh").
+        var addr: String
+        var tail = ""
+        if let q = rest.first, q == "'" || q == "\"" {
+            guard let close = rest.dropFirst().firstIndex(of: q), close > rest.startIndex else { return nil }
+            addr = String(rest[rest.index(after: rest.startIndex)..<close])
+            tail = String(rest[rest.index(after: close)...])
+        } else if let flag = rest.range(of: " -p ") ?? rest.range(of: " -P ") {
+            addr = String(rest[..<flag.lowerBound]).trimmingCharacters(in: .whitespaces)
+            tail = String(rest[flag.lowerBound...])
+        } else if rest.hasSuffix(" -p") || rest.hasSuffix(" -P") {
+            addr = String(rest.dropLast(3)).trimmingCharacters(in: .whitespaces)
+            tail = ""
+        } else if head == "ssh" {
+            addr = rest
+            tail = ""
+        } else {
+            return nil
+        }
+        guard !addr.isEmpty else { return nil }
+
+        // опциональный -p PORT из хвоста
+        var port: Int?
+        let t = tail.trimmingCharacters(in: .whitespaces)
+        if t.hasPrefix("-p") || t.hasPrefix("-P") {
+            let digits = t.dropFirst(2).trimmingCharacters(in: .whitespaces).prefix(while: { $0.isNumber })
+            guard !digits.isEmpty, let p = Int(digits), (1...65535).contains(p) else { return nil }
+            port = p
+        }
+
+        // добавляем :port к host-части (после "@"), если inline-порта ещё нет
+        var out = addr
+        if let p = port {
+            let hostPart: String
+            if let at = addr.lastIndex(of: "@") {
+                hostPart = String(addr[addr.index(after: at)...])
+            } else {
+                hostPart = addr
+            }
+            if !hostPart.contains(":") { out = addr + ":\(p)" }
+        }
+        return out
     }
 
     /// Добавляет хост в конфиг. Возвращает nil в случае успеха, иначе текст ошибки
