@@ -106,8 +106,9 @@ func testCommands() {
     print("-- Command batches --")
     let batch = CommandBatch.build(for: HostConfig(name: "k8s-01", ssh: "r@h"))
     for k in ["HL_OS", "HL_CORES", "HL_UPTIME", "HL_MEM_USED", "HL_DISK_TOTAL", "HL_TEMP", "HL_NET_RX", "HL_DISK_R", "HL_CPU"] {
-        ok(batch.contains(k), "batch has \(k)")
-    }
+            ok(batch.contains(k), "batch has \(k)")
+        }
+        ok(batch.contains("HL_DISK_AVAIL"), "batch collects available disk space")
     ok(batch.contains("/proc/meminfo"), "batch probes /proc (linux)")
     ok(batch.contains("sysctl"), "batch probes sysctl (macos)")
     ok(batch.contains("HL_OS=linux") && batch.contains("HL_OS=macos"), "os auto-detected in-shell")
@@ -252,6 +253,7 @@ func testSampleEngine() throws {
     HL_MEM_TOTAL=17179869184
     HL_MEM_USED=8589934592
     HL_DISK_TOTAL=99774301388
+    HL_DISK_AVAIL=49887150694
     HL_TEMP=51
     HL_TEMP_BOARD=38.5
     HL_LINK=2500
@@ -275,6 +277,8 @@ func testSampleEngine() throws {
     close(s1.snapshot.cpuPct ?? -1, 2.4, "cpu")
     eq(s1.snapshot.linkMbps, 2500, "link parse")
     eq(s1.snapshot.diskKind, "nvme" as String?, "disk kind parse")
+    close(s1.snapshot.diskFreePct ?? -1, 50.0, "disk free pct (avail/total)")
+    close(s1.snapshot.diskUsedPct ?? -1, 50.0, "disk used pct = 100 - free")
     close(s1.snapshot.tempBoardC ?? -1, 38.5, "board temp")
     eq(s1.snapshot.uptimeText, "1d 22h", "uptime text")
     eq(s1.snapshot.isOnline, true, "online status")
@@ -612,6 +616,13 @@ func testSshPort() {
     let aP = recP.rec.calls.first ?? ""
     ok(aP.contains("admin@bastion.example.com") && aP.contains("2222") && !aP.contains("-J"),
        "plain user@host[:port]: без -J, destination user@host + -p port")
+
+    // SshRunner.tail — единый builder, используемый и консолью, и экспортом
+    eq(SshRunner.tail(for: "user@h:2222"), ["-p", "2222", "user@h"], "tail plain with port")
+    eq(SshRunner.tail(for: "user@h"), ["user@h"], "tail plain no port")
+    eq(SshRunner.tail(for: "h:22"), ["-p", "22", "h"], "tail bare host port")
+    eq(SshRunner.tail(for: "admin:worker-3@bastion.example.com:2222"),
+       ["-J", "admin@bastion.example.com:2222", "admin@worker-3"], "tail jump: -J proxy + final")
 }
 
 // MARK: - main

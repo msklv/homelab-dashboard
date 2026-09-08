@@ -76,7 +76,6 @@ public struct SshRunner {
 
     /// Выполнить batch на сервере.
     public func run(_ host: HostConfig, timeout: Int, batch: String) -> ExecResult {
-            let (target, port) = SshRunner.split(host.ssh)
             var argv = [
                 "/usr/bin/ssh",
                 "-o", "BatchMode=yes",
@@ -84,11 +83,18 @@ public struct SshRunner {
                 "-o", "StrictHostKeyChecking=accept-new",
                 "-o", "LogLevel=ERROR",
             ]
-            // Джамп-форма `user:alias@host[:port]`: user-часть (до последнего `@`)
-            // содержит `:`. Destination `user:alias@host` c двоеточием в username ssh
-            // разбирает как user="admin:worker-3" (проверено ssh -G) и не подключится.
-            // Добраться до VM за бастионом пробрасываем через ProxyJump:
-            //   ssh -J user@bastion:PORT user@alias.
+            argv += SshRunner.tail(for: host.ssh)   // [-p port| -J …] + destination
+            argv += [batch]
+            return executor.run(argv)
+        }
+
+        /// Строит «хвост» команды ssh (цель + порт/джамп). Обычная форма
+        /// `user@host[:port]` → `["-p", port, user@host]`. Джамп-форма
+        /// `user:alias@host[:port]` → `["-J", user@host:port, user@alias]` —
+        /// иначе destination с двоеточием в username ssh разбирает как
+        /// user="admin:worker-3" (проверено ssh -G) и не подключится.
+        public static func tail(for destination: String) -> [String] {
+            let (target, port) = SshRunner.split(destination)
             if let at = target.lastIndex(of: "@"), target[..<at].contains(":") {
                 let userAlias = String(target[..<at])            // user:alias
                 let bastion = String(target[target.index(after: at)...])
@@ -98,13 +104,13 @@ public struct SshRunner {
                 if !alias.isEmpty {
                     var jump = user + "@" + bastion
                     if let port { jump += ":\(port)" }
-                    argv += ["-J", jump, user + "@" + alias, batch]
-                    return executor.run(argv)
+                    return ["-J", jump, user + "@" + alias]
                 }
             }
-            if let port { argv += ["-p", "\(port)"] }
-            argv += [target, batch]
-            return executor.run(argv)
+            var out: [String] = []
+            if let port { out += ["-p", "\(port)"] }
+            out += [target]
+            return out
         }
 
         /// Разбирает ssh-адрес на (target, port?). Синтаксис `user@host[:port]`.

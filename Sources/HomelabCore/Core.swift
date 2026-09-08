@@ -18,6 +18,7 @@ public struct HostSnapshot: Equatable, Sendable {
     public var ramTotal: UInt64?        // bytes
     public var ramUsedPct: Double?
     public var diskTotal: UInt64?       // bytes — суммарный объём ФИЗИЧЕСКИХ дисков
+    public var diskAvail: UInt64?       // bytes — свободно на размонтированном-корневом разделе
     public var diskKind: String?        // nvme / ssd / hdd
     public var uptimeSec: UInt64?
     public var tempC: Double?
@@ -32,6 +33,17 @@ public struct HostSnapshot: Equatable, Sendable {
     public var ramUsed: UInt64? {
         guard let t = ramTotal, let p = ramUsedPct else { return nil }
         return UInt64(Double(t) * p / 100)
+    }
+
+    /// Доля СВОБОДНОГО места на корневом разделе (0–100). nil — если нет пары total/avail.
+    public var diskFreePct: Double? {
+        guard let t = diskTotal, let a = diskAvail, t > 0 else { return nil }
+        return Double(a) / Double(t) * 100
+    }
+
+    public var diskUsedPct: Double? {
+        guard let f = diskFreePct else { return nil }
+        return 100 - f
     }
 
     public var uptimeText: String? {
@@ -107,6 +119,7 @@ public final class SampleEngine {
             snap.ramUsedPct = Double(used) / Double(total) * 100
         }
         snap.diskTotal = kv["HL_DISK_TOTAL"].flatMap(UInt64.init)
+        snap.diskAvail = kv["HL_DISK_AVAIL"].flatMap(UInt64.init)
         let kind = kv["HL_DISKKIND"] ?? ""
         snap.diskKind = kind.isEmpty ? nil : kind
         snap.uptimeSec = kv["HL_UPTIME"].flatMap(UInt64.init)
@@ -169,6 +182,7 @@ public enum CommandBatch {
             "act=$(vm_stat | awk '/Pages active/{print $3}' | tr -d '.'); ina=$(vm_stat | awk '/Pages inactive/{print $3}' | tr -d '.'); spec=$(vm_stat | awk '/Pages speculative/{print $3}' | tr -d '.'); fb=$(vm_stat | awk '/File-backed pages/{print $3}' | tr -d '.'); wd=$(vm_stat | awk '/Pages wired down/{print $4}' | tr -d '.'); oc=$(vm_stat | awk '/Pages occupied by compressor/{print $5}' | tr -d '.'); used=$(( ( (act+ina+spec-fb) + wd + oc ) * ps )); echo HL_MEM_TOTAL=$total; echo HL_MEM_USED=$used",
             // Объём физических внутренних дисков (без NFS/сетевых и без задвоения APFS-слайсов).
             "echo HL_DISK_TOTAL=$(df -b 1 / 2>/dev/null | tail -1 | awk '{print $2*512}')",
+            "echo HL_DISK_AVAIL=$(df -b 1 / 2>/dev/null | tail -1 | awk '{print $4*512}')",
             "bootproto=$(diskutil info / | awk -F: '/Protocol/{gsub(/ /,\"\",$2); print toupper($2)}'); case \"$bootproto\" in *SATA*) echo HL_DISKKIND=ssd;; *) echo HL_DISKKIND=nvme;; esac",
             // Температура CPU/платы на macOS без root недоступна (powermetrics требует sudo).
             "echo HL_TEMP=",
@@ -196,6 +210,7 @@ public enum CommandBatch {
             "echo HL_MEM_USED=$(awk '/MemTotal/{t=$2} /MemAvailable/{a=$2} END{print (t-a)*1024}' /proc/meminfo)",
             // Сумма объёма всех физических блочных дисков (без loop/zram) — «как на коробке».
             "echo HL_DISK_TOTAL=$(df -B1 / 2>/dev/null | tail -1 | awk '{print $2}')",
+            "echo HL_DISK_AVAIL=$(df -B1 / 2>/dev/null | tail -1 | awk '{print $4}')",
             "echo HL_DISKKIND=$(lsblk -dbrno NAME,TYPE,ROTA 2>/dev/null | awk '$2 == \"disk\" && $1 !~ /^(loop|zram|ram)/ { if($1 ~ /nvme/) nv=1; else if($3==0) ss=1; else hd=1 } END { if(nv) print \"nvme\"; else if(ss) print \"ssd\"; else if(hd) print \"hdd\" }')",
             // Температура: pkg/soc-зоны → CPU, остальные (acpitz/pch) → плата.
             "zt=\"\"; for z in /sys/class/thermal/thermal_zone*; do [ -r $z/temp ] || continue; t=$(cat $z/temp 2>/dev/null); ty=$(cat $z/type 2>/dev/null); [ -z \"$t\" ] && continue; zt=\"$zt $ty:$t\"; done; echo $zt | awk '{cb=-1; bb=-1; for(i=1;i<=NF;i++){split($i,a,\":\"); v=a[2]/1000; if(a[1] ~ /x86_pkg_temp|cpu_thermal|soc_thermal|tsens|package/) { if(v>cb) cb=v } else if(v>bb) bb=v }; if(cb<0 && bb>=0) cb=bb; if(cb>=0) printf \"HL_TEMP=%.1f\\n\", cb; if(bb>=0) printf \"HL_TEMP_BOARD=%.1f\\n\", bb}'",

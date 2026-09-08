@@ -474,11 +474,17 @@ struct HostCard: View {
             RingMetric(label: "CPU", pct: s.cpuPct, color: LevelColor.forPct(s.cpuPct, store.config.thresholds))
             RingMetric(label: "RAM", pct: s.ramUsedPct, color: LevelColor.forPct(s.ramUsedPct, store.config.thresholds))
             Divider().frame(height: 42)
-            TextTwin(title: "Сеть", rows: [("↑", Format.bytesPerSecond(s.netUp)), ("↓", Format.bytesPerSecond(s.netDown))],
-                     accessory: s.linkMbps.map(Format.link))
-            Spacer(minLength: 0)
-            TextTwin(title: "Диск", rows: [("R", Format.bytesPerSecond(s.diskRead)), ("W", Format.bytesPerSecond(s.diskWrite))],
-                     accessory: s.diskKind)
+            // Правая колонка: Сеть/Диск + линия свободного места диска под ними.
+            VStack(alignment: .leading, spacing: 5) {
+                HStack(alignment: .top) {
+                    TextTwin(title: "Сеть", rows: [("↑", Format.bytesPerSecond(s.netUp)), ("↓", Format.bytesPerSecond(s.netDown))],
+                             accessory: s.linkMbps.map(Format.link))
+                    Spacer(minLength: 8)
+                    TextTwin(title: "Диск", rows: [("R", Format.bytesPerSecond(s.diskRead)), ("W", Format.bytesPerSecond(s.diskWrite))],
+                             accessory: s.diskKind)
+                }
+                diskSpaceLine(s)
+            }
         }
     }
 
@@ -487,6 +493,31 @@ struct HostCard: View {
             TempItem(label: "CPU", value: s.tempC)
             TempItem(label: "Плата", value: s.tempBoardC)
             Spacer(minLength: 0)
+        }
+    }
+
+    /// Линия оставшегося места на корневом разделе диска: длина растёт со
+    /// свободным местом, цвет — по занятости (green → warning → critical) через
+    /// общие пороги. nil → серая линия без заливки (у хоста нет пары total/avail).
+    private func diskSpaceLine(_ s: HostSnapshot) -> some View {
+        let free = s.diskFreePct
+        let used = s.diskUsedPct
+        return HStack(spacing: 6) {
+            GeometryReader { geo in
+                ZStack(alignment: .leading) {
+                    Capsule().fill(Color.secondary.opacity(0.15))
+                    if let f = free {
+                        let w = geo.size.width * CGFloat(min(max(f, 0), 100)) / 100
+                        Capsule()
+                            .fill(LevelColor.forPct(used, store.config.thresholds))
+                            .frame(width: max(w, 4))
+                    }
+                }
+            }
+            .frame(height: 5)
+            Text(Format.percent(free))
+                .font(.caption2.monospacedDigit())
+                .foregroundColor(free == nil ? .secondary : LevelColor.forPct(used, store.config.thresholds))
         }
     }
 
@@ -823,8 +854,7 @@ private enum HostCardMarkdown {
         var lines: [String] = []
             lines.append("### \(title)  ·  \(status)  ·  ping \(ping)")
             lines.append("")
-            let target = SshRunner.split(s.host.ssh)
-            let sshCmd = target.1.map { "ssh -p \($0) \(target.0)" } ?? "ssh \(s.host.ssh)"
+            let sshCmd = "ssh " + SshRunner.tail(for: s.host.ssh).joined(separator: " ")
             lines.append("- **Подключение:** `\(sshCmd)`")
         lines.append("- **Хост:** \(osName) · \(cores) Cores · RAM \(ramUsed)/\(ramTotal) (\(ramPct)) · Диск \(kind) \(disk)")
         lines.append("- **Нагрузка:** CPU **\(cpu)** · RAM **\(ramPct)**")

@@ -356,8 +356,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 /// Открывает новое окно Терминала и запускает в нём SSH к переданному хосту.
 enum TerminalOpener {
     static func open(_ destination: String, log: LogStore? = nil) {
-        let seg = SshRunner.split(destination)
-        let raw = seg.1.map { "ssh -o ServerAliveInterval=30 -p \($0) \(seg.0)" } ?? "ssh -o ServerAliveInterval=30 \(destination)"
+        // Единый с SshRunner.tail строитель: для джамп-форм подставляет -J user@bastion:port user@alias.
+        let tail = SshRunner.tail(for: destination).joined(separator: " ")
+        let raw = "ssh -o ServerAliveInterval=30 \(tail)"
         let escaped = raw.replacingOccurrences(of: "\"", with: "\\\"")
         let script = """
         tell application "Terminal"
