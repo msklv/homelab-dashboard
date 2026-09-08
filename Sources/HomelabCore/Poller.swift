@@ -138,7 +138,12 @@ public final class Poller {
                 onUpdate?(host, ns.snapshot)
                 return ns.snapshot
             } catch {
+                // exit 0 — SSH/хост доступен, но ответ не разобрался. Считаем связь
+                // успешной: сбрасываем счётчик сбоев, держим прошлый валидный
+                // снапшот, статус pending. (apply сейчас не бросает, ветка дефенсивная.)
+                st.misses = 0
                 var degraded = st.last ?? HostSnapshot(host: host)
+                degraded.host = host
                 degraded.status = .pending
                 degraded.pingMs = ping
                 st.lock.unlock()

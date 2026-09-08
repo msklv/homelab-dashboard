@@ -184,7 +184,9 @@ public extension Config {
         var c = Config()
         c.pollInterval = root["poll_interval"]?.int ?? c.pollInterval
         c.timeout = root["timeout"]?.int ?? c.timeout
-        c.offlineAfterMisses = root["offline_after_misses"]?.int ?? c.offlineAfterMisses
+        // нижняя граница ≥1: 0/отрицательное из конфига не должно делать хост
+        // offline мгновенно (0) или вечно (отрицательное).
+        c.offlineAfterMisses = max(1, root["offline_after_misses"]?.int ?? c.offlineAfterMisses)
         c.maxConcurrent = root["max_concurrent"]?.int ?? c.maxConcurrent
         if let themeStr = root["theme"]?.string, let t = ThemeMode(rawValue: themeStr) { c.theme = t }
 
