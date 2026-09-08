@@ -7,6 +7,10 @@ A native macOS (Apple Silicon) SSH-based dashboard for monitoring your Linux and
 live metrics, groups, colored tags, light/dark theme, and a YAML config with instant hot-reload.
 **Zero external dependencies** — own YAML parser and test runner, system SSH/Ping only.
 
+## Скриншот / Screenshot
+
+![Dashboard](docs/screenshots/dashboard.png)
+
 ## Особенности / Features
 
 - Live pull-мониторинг по SSH (на серверах ничего не устанавливается)
