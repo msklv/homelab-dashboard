@@ -17,6 +17,9 @@ public final class Poller {
     private let sem: DispatchSemaphore
     private var running = false
     private var pausedHosts: Set<String> = []
+    private var collapsedGroups: Set<String> = []
+    /// Runtime-множество свёрнутых на время жизни поллера групп.
+    public var collapsedGroupNames: Set<String> { lock.lock(); defer { lock.unlock() }; return collapsedGroups }
 
     private final class HostState {
         let lock = NSLock()
@@ -25,12 +28,14 @@ public final class Poller {
         var last: HostSnapshot?
     }
 
-    public init(config: Config, ssh: SshRunner = SshRunner(), pinger: PingRunner = PingRunner(), log: LogStore? = nil) {
+    public init(config: Config, ssh: SshRunner = SshRunner(), pinger: PingRunner = PingRunner(),
+                log: LogStore? = nil, collapsedGroups: Set<String> = []) {
         self.config = config
         self.ssh = ssh
         self.pinger = pinger
         self.log = log
         self.sem = DispatchSemaphore(value: max(1, config.maxConcurrent))
+        self.collapsedGroups = collapsedGroups
     }
 
     private func state(for name: String) -> HostState {
@@ -72,6 +77,28 @@ public final class Poller {
         if !paused && !isPaused(host.name) { // снятие паузы
             DispatchQueue.global(qos: .utility).async { [weak self] in
                 self?.tick(host)
+            }
+        }
+    }
+
+    /// Группа, свёрнутая в UI (мониторинг её хостов приостановлен). Runtime,
+    /// не персистится — стартовая свёрнутость приходит из конфига (init).
+    public func isCollapsedGroup(_ name: String) -> Bool {
+        lock.lock(); defer { lock.unlock() }
+        return collapsedGroups.contains(name)
+    }
+
+    /// Сворачивает/разворачивает группу. При разворачивании — мгновенный опрос
+    /// хостов группы в фоне (не блокируя вызывающий поток).
+    public func setGroupCollapsed(_ name: String, _ collapsed: Bool) {
+        lock.lock()
+        if collapsed { collapsedGroups.insert(name) } else { collapsedGroups.remove(name) }
+        lock.unlock()
+        if !collapsed {
+            let hosts = config.hosts.filter { effectiveGroup($0) == name }
+            guard !hosts.isEmpty else { return }
+            DispatchQueue.global(qos: .utility).async { [weak self] in
+                for h in hosts { self?.tick(h) }
             }
         }
     }
@@ -145,8 +172,16 @@ public final class Poller {
         return "SSH \(state), exit \(res.exitCode)\(head.isEmpty ? "" : " — \(head)")"
     }
 
+    /// Название группы хоста: пустой group (без группы) → «Прочее».
+    private func effectiveGroup(_ host: HostConfig) -> String {
+        let g = host.group ?? ""
+        return g.isEmpty ? Config.unknownGroupName : g
+    }
+
     public func tick(_ host: HostConfig) {
         if isPaused(host.name) { return }
+        // свёрнутая группа: мониторинг карточек приостановлен
+        if isCollapsedGroup(effectiveGroup(host)) { return }
         _ = collectOnce(host)
     }
 

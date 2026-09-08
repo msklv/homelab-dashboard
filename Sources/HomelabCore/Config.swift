@@ -23,6 +23,17 @@ public struct TagDef: Equatable, Sendable {
     }
 }
 
+/// Одна секция-группа в конфиге. `collapsed` — начальное состояние UI
+/// (свёрнутая группа в поллере не опрашивается) и персистится в YAML.
+public struct GroupDef: Equatable, Sendable {
+    public var name: String
+    public var collapsed: Bool
+    public init(name: String, collapsed: Bool = false) {
+        self.name = name
+        self.collapsed = collapsed
+    }
+}
+
 public struct HostConfig: Equatable, Sendable {
     public var name: String
     public var ssh: String
@@ -62,7 +73,7 @@ public struct Config: Equatable, Sendable {
     public var maxConcurrent: Int = 4
     public var theme: ThemeMode = .system
     public var thresholds: Thresholds = .default
-    public var groups: [String] = []
+    public var groups: [GroupDef] = []
     public var tags: [TagDef] = []
     public var hosts: [HostConfig] = []
 
@@ -77,14 +88,26 @@ public struct Config: Equatable, Sendable {
         host.timeout ?? timeout
     }
 
-    public var unknownGroupName: String { "Прочее" }
+    /// Имя синтетической группы для хоста без группы («Прочее»).
+    public static let unknownGroupName = "Прочее"
+    public var unknownGroupName: String { Self.unknownGroupName }
 
     public var groupsWithUngrouped: [String] {
-        var g = groups
+        var g = groups.map { $0.name }
         if hosts.contains(where: { $0.group == nil || ($0.group ?? "").isEmpty }) {
             if !g.contains(unknownGroupName) { g.append(unknownGroupName) }
         }
         return g
+    }
+
+    /// Свернута ли группа (персистируемое состояние из конфига).
+    public func isGroupCollapsed(_ name: String) -> Bool {
+        groups.first { $0.name == name }?.collapsed ?? false
+    }
+
+    /// Имена групп, начально свёрнутых (из конфига).
+    public var collapsedGroupNames: Set<String> {
+        Set(groups.filter { $0.collapsed }.map { $0.name })
     }
 
     /// Сериализация конфига обратно в YAML — для сохранения изменений в файл.
@@ -98,7 +121,10 @@ public struct Config: Equatable, Sendable {
         o += "thresholds:\n  warning: \(thresholds.warning)\n  critical: \(thresholds.critical)\n\n"
         if !groups.isEmpty {
             o += "groups:\n"
-            for g in groups { o += "  - name: \(g)\n" }
+            for g in groups {
+                o += "  - name: \(g.name)\n"
+                if g.collapsed { o += "    collapsed: true\n" }
+            }
             o += "\n"
         }
         if !tags.isEmpty {
@@ -167,7 +193,10 @@ public extension Config {
             c.thresholds.critical = th["critical"]?.int ?? c.thresholds.critical
         }
 
-        c.groups = root["groups"]?.array?.compactMap { $0.map?["name"]?.string } ?? []
+        c.groups = root["groups"]?.array?.compactMap { v -> GroupDef? in
+            guard let m = v.map, let n = m["name"]?.string else { return nil }
+            return GroupDef(name: n, collapsed: m["collapsed"]?.bool ?? false)
+        } ?? []
         c.tags = root["tags"]?.array?.compactMap { v -> TagDef? in
             guard let m = v.map, let n = m["name"]?.string else { return nil }
             return TagDef(name: n, color: m["color"]?.string ?? "gray")

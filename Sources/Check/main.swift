@@ -44,6 +44,7 @@ func testYaml() throws {
       critical: 85
     groups:
       - name: Кластер k8s
+        collapsed: true
     tags:
       - { name: prod, color: green }
     hosts:
@@ -61,6 +62,15 @@ func testYaml() throws {
     eq(m["thresholds"]?.map?["warning"]?.int, 60, "nested thresholds")
     eq(m["groups"]?.array?.count, 1, "groups count")
     eq(m["groups"]?.array?[0].map?["name"]?.string, "Кластер k8s", "group name")
+    eq(m["groups"]?.array?[0].map?["collapsed"]?.bool, true, "group collapsed bool")
+    let cfgG = try Config.parse("""
+    groups:
+      - name: G
+        collapsed: true
+    hosts: []
+    """)
+    eq(cfgG.isGroupCollapsed("G"), true, "isGroupCollapsed reads config true")
+    eq(cfgG.isGroupCollapsed("Nope"), false, "isGroupCollapsed absent group false")
     eq(m["tags"]?.array?[0].map?["name"]?.string, "prod", "tag name")
     eq(m["tags"]?.array?[0].map?["color"]?.string, "green", "tag color")
     eq(m["hosts"]?.array?[0].map?["ssh"]?.string, "dev1@192.0.2.11", "host ssh")
@@ -376,6 +386,38 @@ func testPoller() {
         p5.tick(h5)
         ok(ex5.calls > afterResume, "после старта tick снова опрашивает хост")
     }
+    do {
+        // свёрнутая группа: хосты не опрашиваются; при разворачивании — возобновляются
+        var cg = Config(); cg.offlineAfterMisses = 2
+        cg.groups = [GroupDef(name: "Кластер k8s")]
+        let gHost = HostConfig(name: "k8s-01", ssh: "user@192.0.2.16", group: "Кластер k8s")
+        cg.hosts = [gHost]
+        let exg = MockRecordingExecutor(sshResult: ExecResult(exitCode: 0, stdout: okOut))
+        let pg = Poller(config: cg, ssh: SshRunner(executor: exg), pinger: PingRunner(executor: exg))
+        ok(!pg.isCollapsedGroup("Кластер k8s"), "группа по умолчанию развёрнута")
+        pg.setGroupCollapsed("Кластер k8s", true)
+        ok(pg.isCollapsedGroup("Кластер k8s"), "isCollapsedGroup после сжатия")
+        let beforeG = exg.calls
+        pg.tick(gHost)
+        eq(exg.calls, beforeG, "свёрнутая группа: хосты не опрашиваются")
+        pg.setGroupCollapsed("Кластер k8s", false)
+        pg.tick(gHost)
+        ok(exg.calls > beforeG, "развёрнутая группа: tick снова опрашивает")
+        // инициализация поллера уже свёрнутой группой
+        let pInit = Poller(config: cg, ssh: SshRunner(executor: exg), pinger: PingRunner(executor: exg),
+                           collapsedGroups: ["Кластер k8s"])
+        ok(pInit.isCollapsedGroup("Кластер k8s"), "init принимает свёрнутые группы")
+        // ungrouped хосты принадлежат «Прочее» — свернутое «Прочее» их не опрашивает
+        var cg2 = Config(); cg2.offlineAfterMisses = 2
+        let flat = HostConfig(name: "flat", ssh: "user@192.0.2.17")
+        cg2.hosts = [flat]
+        let exf = MockRecordingExecutor(sshResult: ExecResult(exitCode: 0, stdout: okOut))
+        let pf = Poller(config: cg2, ssh: SshRunner(executor: exf), pinger: PingRunner(executor: exf))
+        pf.setGroupCollapsed("Прочее", true)
+        let beforeF = exf.calls
+        pf.tick(flat)
+        eq(exf.calls, beforeF, "свернутое «Прочее» не опрашивает ungrouped хост")
+    }
 }
 
 // MARK: - Watcher
@@ -440,7 +482,7 @@ func testYamlRoundTrip() throws {
     c.theme = .dark
     c.thresholds.warning = 55
     c.thresholds.critical = 90
-    c.groups = ["Кластер k8s", "macOS"]
+    c.groups = [GroupDef(name: "Кластер k8s", collapsed: true), GroupDef(name: "macOS")]
     c.tags = [TagDef(name: "prod", color: "green"), TagDef(name: "homelab", color: "blue")]
     c.hosts = [
         HostConfig(name: "k8s-01", ssh: "u@192.0.2.11", group: "Кластер k8s", tags: ["prod"]),
@@ -455,6 +497,8 @@ func testYamlRoundTrip() throws {
     eq(parsed.thresholds.warning, 55, "warning round")
     eq(parsed.thresholds.critical, 90, "critical round")
     eq(parsed.groups, c.groups, "groups round")
+    eq(parsed.groups[0].collapsed, true, "group0 collapsed round")
+    eq(parsed.groups[1].collapsed, false, "group1 (no flag) collapsed false round")
     eq(parsed.tags, c.tags, "tags round")
     eq(parsed.hosts.count, 2, "hosts count round")
     eq(parsed.hosts[0].name, "k8s-01", "host0 name")

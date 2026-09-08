@@ -31,7 +31,6 @@ struct ContentView: View {
     @State private var quickAddStatus: String?
     @State private var quickAddIsError = false
     @State private var showLogs = false
-    @State private var collapsedGroups: Set<String> = []
 
     var body: some View {
         ScrollView {
@@ -49,25 +48,12 @@ struct ContentView: View {
                     HostGrid(hosts: store.config.hosts)
                 } else {
                     ForEach(store.config.groupsWithUngrouped, id: \.self) { group in
-                        VStack(alignment: .leading, spacing: 8) {
-                            HStack(spacing: 5) {
-                                Image(systemName: collapsedGroups.contains(group) ? "chevron.right" : "chevron.down")
-                                    .font(.caption2.weight(.semibold))
-                                    .foregroundColor(.secondary)
-                                Text(group)
-                                    .font(.callout.weight(.semibold))
-                                    .foregroundColor(.secondary)
-                                Spacer(minLength: 0)
-                            }
-                            .contentShape(Rectangle())
-                            .onTapGesture(count: 1) {
-                                let collapsed = !collapsedGroups.contains(group)
-                                if collapsed { collapsedGroups.insert(group) } else { collapsedGroups.remove(group) }
-                            }
-                            .help("Клик — свернуть/развернуть группу")
-                            if !collapsedGroups.contains(group) {
-                                HostGrid(hosts: store.hosts(in: group))
-                            }
+                        GroupSection(
+                            name: group,
+                            collapsed: store.isGroupCollapsed(group),
+                            onToggle: { store.toggleGroupCollapsed(group) }
+                        ) {
+                            HostGrid(hosts: store.hosts(in: group))
                         }
                     }
                 }
@@ -155,6 +141,7 @@ struct ContentView: View {
             SummaryBadge(color: LevelColor.accent, value: c.total, label: "Итого")
             SummaryBadge(color: LevelColor.green, value: c.online, label: "Онлайн")
             SummaryBadge(color: LevelColor.critical, value: c.offline, label: "Оффлайн")
+            SummaryBadge(color: .secondary, value: c.paused, label: "Пауза")
         }
     }
 
@@ -217,6 +204,31 @@ struct ContentView: View {
                 }
             }
             Spacer()
+        }
+    }
+}
+
+struct GroupSection<Content: View>: View {
+    let name: String
+    let collapsed: Bool
+    let onToggle: () -> Void
+    @ViewBuilder let content: () -> Content
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 5) {
+                Image(systemName: collapsed ? "chevron.right" : "chevron.down")
+                    .font(.caption2.weight(.semibold))
+                    .foregroundColor(.secondary)
+                Text(name)
+                    .font(.callout.weight(.semibold))
+                    .foregroundColor(.secondary)
+                Spacer(minLength: 0)
+            }
+            .contentShape(Rectangle())
+            .onTapGesture(count: 1, perform: onToggle)
+            .help("Клик — свернуть/развернуть группу (свёрнутую не опрашиваем)")
+            if !collapsed { content() }
         }
     }
 }
@@ -317,7 +329,7 @@ struct HostCard: View {
                     if host.group == nil { Label("Без группы", systemImage: "checkmark") } else { Text("Без группы") }
                 }
                 Divider()
-                ForEach(store.config.groups, id: \.self) { g in
+                ForEach(store.config.groups.map(\.name), id: \.self) { g in
                     Button { store.setGroup(of: host.name, to: g) } label: {
                         if host.group == g { Label(g, systemImage: "checkmark") } else { Text(g) }
                     }

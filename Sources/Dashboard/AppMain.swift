@@ -9,6 +9,7 @@ final class DashboardStore: ObservableObject {
     @Published var themeOverride: ThemeMode?
     @Published var errorMessage: String?
     @Published var pausedHosts: Set<String> = []
+    @Published var collapsedGroups: Set<String> = []
 
     public let log: LogStore
 
@@ -22,6 +23,7 @@ final class DashboardStore: ObservableObject {
         self.config = (try? Config.load(from: path)) ?? Config()
         let saved = UserDefaults.standard.string(forKey: "themeOverride")
         self.themeOverride = saved.flatMap(ThemeMode.init(rawValue:))
+        self.collapsedGroups = config.collapsedGroupNames
     }
 
     func start() {
@@ -48,7 +50,7 @@ final class DashboardStore: ObservableObject {
     private func startPoller(with c: Config) {
         poller?.stop()
         poller = nil
-        let p = Poller(config: c, log: log)
+        let p = Poller(config: c, log: log, collapsedGroups: collapsedGroups)
         p.onUpdate = { [weak self] _, snap in
             DispatchQueue.main.async { self?.snapshots[snap.host.name] = snap }
         }
@@ -64,6 +66,11 @@ final class DashboardStore: ObservableObject {
         let names = Set(added)
         snapshots = snapshots.filter { names.contains($0.key) }
         pausedHosts = [] // сброс пауз при перечитывании конфига
+        // Свёрнутость: реальные группы — из конфига; runtime-только (напр. «Прочее»,
+        // которого нет в YAML) сохраняются через перезагрузку.
+        let real = Set(c.groups.map { $0.name })
+        let runtimeOnly = collapsedGroups.filter { !real.contains($0) }
+        collapsedGroups = c.collapsedGroupNames.union(runtimeOnly)
         startPoller(with: c)
     }
 
@@ -140,7 +147,7 @@ final class DashboardStore: ObservableObject {
         saveConfig { c in
             let name = g.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !name.isEmpty else { return false }
-            if !c.groups.contains(name) { c.groups.append(name) }
+            if !c.groups.contains(where: { $0.name == name }) { c.groups.append(GroupDef(name: name)) }
             return true
         }
     }
@@ -149,7 +156,7 @@ final class DashboardStore: ObservableObject {
         saveConfig { c in
             let name = g.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !name.isEmpty else { return false }
-            if !c.groups.contains(name) { c.groups.append(name) }
+            if !c.groups.contains(where: { $0.name == name }) { c.groups.append(GroupDef(name: name)) }
             if let i = c.hosts.firstIndex(where: { $0.name == host }) {
                 c.hosts[i].group = name
             }
@@ -212,6 +219,29 @@ final class DashboardStore: ObservableObject {
         log.log(.info, name, pausing ? "Пауза опроса" : "Опрос возобновлён")
     }
 
+    // MARK: - Свёрнутость групп (автопауза мониторинга)
+
+    func isGroupCollapsed(_ name: String) -> Bool { collapsedGroups.contains(name) }
+
+    /// Сворачивает/разворачивает группу. Свёрнутая группа не опрашивается
+    /// (поллер пропускает её хосты); состояние реальных групп персистится в YAML,
+    /// синтетическая «Прочее» (её нет в конфиге) — только runtime.
+    func toggleGroupCollapsed(_ name: String) {
+        let collapsing = !collapsedGroups.contains(name)
+        if collapsing { collapsedGroups.insert(name) } else { collapsedGroups.remove(name) }
+        poller?.setGroupCollapsed(name, collapsing)
+        log.log(.info, "config", "Группа «\(name)» \(collapsing ? "свёрнута — мониторинг приостановлен" : "развёрнута")")
+        // Реальные группы пишем в конфиг (переживут перезапуск); reload внутри
+        // saveConfig заново засеет collapsedGroups из конфига и перезапустит поллер.
+        guard config.groups.contains(where: { $0.name == name }) else { return }
+        saveConfig { c in
+            guard let i = c.groups.firstIndex(where: { $0.name == name }),
+                  c.groups[i].collapsed != collapsing else { return false }
+            c.groups[i].collapsed = collapsing
+            return true
+        }
+    }
+
     func isFilterActive(_ t: String) -> Bool { tagFilter.contains(t) }
 
     var appliedTheme: ThemeMode { themeOverride ?? config.theme }
@@ -254,11 +284,18 @@ final class DashboardStore: ObservableObject {
         return config.hosts.filter { h in h.tags.contains(where: { tagFilter.contains($0) }) }
     }
 
-    var statusCount: (total: Int, online: Int, offline: Int) {
+    var statusCount: (total: Int, online: Int, offline: Int, paused: Int) {
         let h = config.hosts
         let online = h.filter { snapshots[$0.name]?.isOnline == true }.count
         let offline = h.filter { snapshots[$0.name]?.status == .offline }.count
-        return (h.count, online, offline)
+        // «на паузе» = ручная пауза хоста ИЛИ хост свёрнутой группы (автопауза);
+        // пустая группа → синтетическая «Прочее».
+        let paused = h.filter { host in
+            if pausedHosts.contains(host.name) { return true }
+            let g = host.group ?? ""
+            return collapsedGroups.contains(g.isEmpty ? Config.unknownGroupName : g)
+        }.count
+        return (h.count, online, offline, paused)
     }
 }
 
@@ -290,7 +327,9 @@ public struct HomeLabApp: App {
         .windowResizability(.contentSize)
 
         .commands {
-            CommandGroup(after: .appInfo) {
+            // Заменяем системный «About homelab-dashboard» на собственный пункт,
+            // иначе в меню приложения дублируются две записи об авторе.
+            CommandGroup(replacing: .appInfo) {
                 Button("О программе…") {
                     openWindow(id: "about")
                 }
