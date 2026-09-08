@@ -1,26 +1,21 @@
-name: build
+name: release
 
 on:
   push:
-    branches: [ main ]
-  pull_request:
-    branches: [ main ]
-  workflow_dispatch:
+    tags: [ 'v*' ]
 
 jobs:
-  build:
-    name: Build + tests (macOS)
+  release:
+    name: Build + publish Release
     runs-on: macos-latest
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v7
       - name: Swift version
         run: swift --version
-      - name: Build (debug)
-        run: swift build
       - name: Build (release)
         run: swift build -c release
-      - name: Tests (Check, self-contained)
-        run: swift run Check
       - name: Assemble .app bundle
         run: |
           APP=homelab-dashboard.app
@@ -55,10 +50,11 @@ jobs:
           </plist>
           PLIST
           codesign --force --deep --sign - "$APP"
-      - name: Upload .app artifact
-        uses: actions/upload-artifact@v4
+      - name: Package zip
+        run: ditto -c -k --keepParent homelab-dashboard.app homelab-dashboard-${{ github.ref_name }}.zip
+      - name: Publish Release
+        uses: softprops/action-gh-release@v2
         with:
-          name: homelab-dashboard
-          path: homelab-dashboard.app
-          if-no-files-found: error
-          compression-level: 9
+          tag_name: ${{ github.ref_name }}
+          files: homelab-dashboard-${{ github.ref_name }}.zip
+          generate_release_notes: true
