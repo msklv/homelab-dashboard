@@ -25,7 +25,9 @@ jobs:
         run: |
           APP=homelab-dashboard.app
           mkdir -p "$APP/Contents/MacOS"
+          mkdir -p "$APP/Contents/Resources"
           cp .build/release/Dashboard "$APP/Contents/MacOS/homelab-dashboard"
+          cp Resources/AppIcon.icns "$APP/Contents/Resources/AppIcon.icns"
           cat > "$APP/Contents/Info.plist" <<'PLIST'
           <?xml version="1.0" encoding="UTF-8"?>
           <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -33,6 +35,8 @@ jobs:
           <dict>
           	<key>CFBundleDisplayName</key>
           	<string>homelab-dashboard</string>
+          	<key>CFBundleIconFile</key>
+          	<string>AppIcon</string>
           	<key>CFBundleExecutable</key>
           	<string>homelab-dashboard</string>
           	<key>CFBundleIdentifier</key>
