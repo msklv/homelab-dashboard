@@ -266,6 +266,7 @@ public struct HomeLabApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var delegate
     @StateObject private var store: DashboardStore
     @StateObject private var logStore: LogStore
+    @Environment(\.openWindow) private var openWindow
 
     public init() {
         let log = LogStore()
@@ -281,6 +282,20 @@ public struct HomeLabApp: App {
                 .frame(minWidth: 920, minHeight: 600)
         }
         .defaultSize(width: 1120, height: 760)
+
+        Window("О программе", id: "about") {
+            AboutView()
+                .frame(width: 420, height: 320)
+        }
+        .windowResizability(.contentSize)
+
+        .commands {
+            CommandGroup(after: .appInfo) {
+                Button("О программе…") {
+                    openWindow(id: "about")
+                }
+            }
+        }
     }
 }
 
@@ -369,5 +384,39 @@ enum AppIcon {
             tinted.draw(in: CGRect(x: 143, y: 143, width: 226, height: 226))
         }
         return icon
+    }
+}
+
+/// Собственное окно «О программе»: имя автора, ник и ссылка на репозиторий.
+struct AboutView: View {
+    private let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "0.1.1"
+    private let repoURL = URL(string: "https://github.com/msklv/homelab-dashboard")!
+
+    var body: some View {
+        VStack(spacing: 16) {
+            if let icon = NSApp.applicationIconImage {
+                Image(nsImage: icon)
+                    .resizable()
+                    .frame(width: 96, height: 96)
+            }
+
+            Text("Homelab Dashboard")
+                .font(.title2.bold())
+
+            Text("Версия \(version)")
+                .foregroundStyle(.secondary)
+
+            Divider()
+
+            Text("Михаил Соколов")
+                .font(.headline)
+            Text("@msklv")
+                .foregroundStyle(.secondary)
+
+            Link("github.com/msklv/homelab-dashboard", destination: repoURL)
+                .font(.callout)
+        }
+        .padding(24)
+        .fixedSize()
     }
 }
