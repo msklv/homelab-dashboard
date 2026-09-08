@@ -16,12 +16,13 @@ public enum QuickAdd {
     /// ssh = currentUser@адрес. nil — если строка пуста или адрес не распознан.
     ///
     /// Имя можно задать явно префиксом `имя=address` (напр. `vm2=user@h:2222`).
-    /// Для джамп-хостов вида `user:alias@host` имя по умолчанию берётся из `alias`
-    /// (это реальная VM за бастионом), а не из host-части (бастион).
+    /// Иначе name — host-часть (после последнего `@`, без :port).
     ///
     /// Поддерживается и ssh-cli стиль: `ssh 'user:alias@host' -p PORT`,
     /// `ssh user@host -p PORT`, `'user@host:2222'` — нормализуется в
-    /// `user:alias@host:PORT` (порт переводится в `@host:PORT`).
+    /// `user:alias@host:PORT` (порт переводится в `@host:PORT`). Строка
+    /// сохраняется как есть — это готовая цель для `ssh` (никакого ProxyJump:
+    /// двоеточие в user-части — просто часть логина `login:token@host`).
     public static func parse(_ raw: String, currentUser: String) -> Dest? {
         var forcedName: String?
         var s = raw.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -43,13 +44,8 @@ public enum QuickAdd {
         var ssh: String
         if let at = s.firstIndex(of: "@") {
             ssh = s
-            let userPart = String(s[..<at])
             let host = String(s[s.index(after: at)...])
-            if let c = userPart.firstIndex(of: ":") {
-                name = String(userPart[userPart.index(after: c)...]) // user:alias@host -> alias
-            } else {
-                name = SshRunner.split(host).0 // без :port, чтобы имя было чистым host'ом
-            }
+            name = SshRunner.split(host).0 // без :port, чтобы имя было чистым host'ом
         } else {
             name = SshRunner.split(s).0
             ssh = currentUser + "@" + s

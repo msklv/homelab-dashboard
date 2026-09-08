@@ -83,30 +83,18 @@ public struct SshRunner {
                 "-o", "StrictHostKeyChecking=accept-new",
                 "-o", "LogLevel=ERROR",
             ]
-            argv += SshRunner.tail(for: host.ssh)   // [-p port| -J …] + destination
+            argv += SshRunner.tail(for: host.ssh)   // [-p port] + destination из ssh:
             argv += [batch]
             return executor.run(argv)
         }
 
-        /// Строит «хвост» команды ssh (цель + порт/джамп). Обычная форма
-        /// `user@host[:port]` → `["-p", port, user@host]`. Джамп-форма
-        /// `user:alias@host[:port]` → `["-J", user@host:port, user@alias]` —
-        /// иначе destination с двоеточием в username ssh разбирает как
-        /// user="admin:worker-3" (проверено ssh -G) и не подключится.
+        /// Строит «хвост» команды ssh прямо из строки подключения из конфига
+        /// (`ssh:` — это готовая цель, храним и подключаемся по ней как есть).
+        /// `user@host[:port]` → `["-p", port, user@host]`; порт из хвоста выносится
+        /// в `-p`. Двоеточие в user-части (`login:token@host`) — это часть имени
+        /// пользователя, НЕ маркер ProxyJump: передаём destination как есть.
         public static func tail(for destination: String) -> [String] {
             let (target, port) = SshRunner.split(destination)
-            if let at = target.lastIndex(of: "@"), target[..<at].contains(":") {
-                let userAlias = String(target[..<at])            // user:alias
-                let bastion = String(target[target.index(after: at)...])
-                let c = userAlias.firstIndex(of: ":")!
-                let user = String(userAlias[..<c])
-                let alias = String(userAlias[userAlias.index(after: c)...])
-                if !alias.isEmpty {
-                    var jump = user + "@" + bastion
-                    if let port { jump += ":\(port)" }
-                    return ["-J", jump, user + "@" + alias]
-                }
-            }
             var out: [String] = []
             if let port { out += ["-p", "\(port)"] }
             out += [target]
