@@ -429,7 +429,7 @@ enum AppIcon {
 
 /// Собственное окно «О программе»: имя автора, ник и ссылка на репозиторий.
 struct AboutView: View {
-    private let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "0.1.1"
+    private let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "0.2.0"
     private let repoURL = URL(string: "https://github.com/msklv/homelab-dashboard")!
 
     var body: some View {

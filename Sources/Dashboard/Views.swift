@@ -274,13 +274,105 @@ struct HostGrid: View {
 
 // MARK: - Карточка хоста
 
+/// Стабильная оболочка карточки. Держит контекстное меню и диалоги,
+/// но в `body` НЕ читает `store.snapshot`/`pausedHosts`: любые обращения к
+/// ним вынесены в closures (меню/действия), чтобы частые обновления поллера
+/// не пересобирали открытое меню (иначе оно мигает/закрывается на macOS).
 struct HostCard: View {
     let host: HostConfig
     @EnvironmentObject private var store: DashboardStore
     @State private var showDelete = false
-    @State private var dropActive = false
     @State private var prompt: HostPrompt?
     @State private var promptText = ""
+
+    var body: some View {
+        HostCardContent(host: host)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .confirmationDialog("Удалить хост «\(host.name)»?",
+                                isPresented: $showDelete,
+                                titleVisibility: .visible) {
+                Button("Удалить", role: .destructive) { store.deleteHost(host.name) }
+                Button("Отмена", role: .cancel) {}
+            } message: {
+                Text("Хост и его данные будут удалены из конфигурации.")
+            }
+            .contextMenu {
+                Menu {
+                    Button { store.setGroup(of: host.name, to: nil) } label: {
+                        if host.group == nil { Label("Без группы", systemImage: "checkmark") } else { Text("Без группы") }
+                    }
+                    Divider()
+                    ForEach(store.config.groups.map(\.name), id: \.self) { g in
+                        Button { store.setGroup(of: host.name, to: g) } label: {
+                            if host.group == g { Label(g, systemImage: "checkmark") } else { Text(g) }
+                        }
+                    }
+                    Divider()
+                    Button("Новая группа…") { prompt = .newGroup }
+                } label: {
+                    Label("Группа: \(host.group ?? "Прочее")", systemImage: "folder")
+                }
+                Menu {
+                    if store.config.tags.isEmpty {
+                        Text("Тегов пока нет")
+                    }
+                    ForEach(store.config.tags, id: \.name) { tag in
+                        Button { store.setTags(host.name, tag: tag.name, on: !host.tags.contains(tag.name)) } label: {
+                            if host.tags.contains(tag.name) { Label(tag.name, systemImage: "checkmark") } else { Text(tag.name) }
+                        }
+                    }
+                    if !store.config.tags.isEmpty { Divider() }
+                    Button("Новый тег…") { prompt = .newTag }
+                } label: {
+                    Label("Теги: \(host.tags.count)", systemImage: "tag")
+                }
+                Divider()
+                Button {
+                    let s = store.snapshot(for: host.name)
+                    let md = HostCardMarkdown.build(s)
+                    let pb = NSPasteboard.general
+                    pb.clearContents()
+                    pb.setString(md, forType: .string)
+                    store.log.log(.info, "action", "Карточка «\(host.name)»: markdown скопирован (\(md.count) симв.)")
+                } label: {
+                    Label("Копировать карточку (MD)", systemImage: "doc.on.doc")
+                }
+                Divider()
+                Button { store.togglePause(host.name) } label: {
+                    if store.pausedHosts.contains(host.name) {
+                        Label("Старт (снять паузу)", systemImage: "play.fill")
+                    } else {
+                        Label("Пауза", systemImage: "pause.fill")
+                    }
+                }
+                Divider()
+                Button("Удалить хост…", role: .destructive) { showDelete = true }
+            }
+            .alert(prompt == .newGroup ? "Новая группа" : "Новый тег", isPresented: Binding(
+                get: { prompt != nil },
+                set: { if !$0 { promptText = ""; prompt = nil } })) {
+                if prompt == .newGroup {
+                    TextField("Имя группы", text: $promptText)
+                    Button("Создать и переместить") { store.createGroupAndMove(host.name, promptText); promptText = ""; prompt = nil }
+                    Button("Только создать") { store.createGroup(promptText); promptText = ""; prompt = nil }
+                    Button("Отмена", role: .cancel) { promptText = ""; prompt = nil }
+                } else {
+                    TextField("Имя тега", text: $promptText)
+                    Button("Создать и применить") { store.createTagAndAssign(host.name, promptText); promptText = ""; prompt = nil }
+                    Button("Отмена", role: .cancel) { promptText = ""; prompt = nil }
+                }
+            } message: {
+                Text(prompt == .newGroup ? "Переместить хост в новую группу" : "Создать тег и добавить его хосту")
+            }
+    }
+}
+
+/// Живой контент карточки — единственное место, читающее снапшот/паузу.
+/// Пересобирается на каждом опросе (и это нормально: контекстное меню тут не живёт).
+struct HostCardContent: View {
+    let host: HostConfig
+    @EnvironmentObject private var store: DashboardStore
+    @State private var dropActive = false
 
     var body: some View {
         let s = store.snapshot(for: host.name)
@@ -314,81 +406,6 @@ struct HostCard: View {
                 DispatchQueue.main.async { store.setGroup(of: from, to: host.group) }
             }
             return true
-        }
-        .confirmationDialog("Удалить хост «\(host.name)»?",
-                            isPresented: $showDelete,
-                            titleVisibility: .visible) {
-            Button("Удалить", role: .destructive) { store.deleteHost(host.name) }
-            Button("Отмена", role: .cancel) {}
-        } message: {
-            Text("Хост и его данные будут удалены из конфигурации.")
-        }
-        .contextMenu {
-            Menu {
-                Button { store.setGroup(of: host.name, to: nil) } label: {
-                    if host.group == nil { Label("Без группы", systemImage: "checkmark") } else { Text("Без группы") }
-                }
-                Divider()
-                ForEach(store.config.groups.map(\.name), id: \.self) { g in
-                    Button { store.setGroup(of: host.name, to: g) } label: {
-                        if host.group == g { Label(g, systemImage: "checkmark") } else { Text(g) }
-                    }
-                }
-                Divider()
-                Button("Новая группа…") { prompt = .newGroup }
-            } label: {
-                Label("Группа: \(host.group ?? "Прочее")", systemImage: "folder")
-            }
-            Menu {
-                if store.config.tags.isEmpty {
-                    Text("Тегов пока нет")
-                }
-                ForEach(store.config.tags, id: \.name) { tag in
-                    Button { store.setTags(host.name, tag: tag.name, on: !host.tags.contains(tag.name)) } label: {
-                        if host.tags.contains(tag.name) { Label(tag.name, systemImage: "checkmark") } else { Text(tag.name) }
-                    }
-                }
-                if !store.config.tags.isEmpty { Divider() }
-                Button("Новый тег…") { prompt = .newTag }
-            } label: {
-                Label("Теги: \(host.tags.count)", systemImage: "tag")
-            }
-            Divider()
-            Button {
-                let md = HostCardMarkdown.build(s)
-                let pb = NSPasteboard.general
-                pb.clearContents()
-                pb.setString(md, forType: .string)
-                store.log.log(.info, "action", "Карточка «\(host.name)»: markdown скопирован (\(md.count) симв.)")
-            } label: {
-                Label("Копировать карточку (MD)", systemImage: "doc.on.doc")
-            }
-            Divider()
-            Button { store.togglePause(host.name) } label: {
-                if store.pausedHosts.contains(host.name) {
-                    Label("Старт (снять паузу)", systemImage: "play.fill")
-                } else {
-                    Label("Пауза", systemImage: "pause.fill")
-                }
-            }
-            Divider()
-            Button("Удалить хост…", role: .destructive) { showDelete = true }
-        }
-        .alert(prompt == .newGroup ? "Новая группа" : "Новый тег", isPresented: Binding(
-            get: { prompt != nil },
-            set: { if !$0 { promptText = ""; prompt = nil } })) {
-            if prompt == .newGroup {
-                TextField("Имя группы", text: $promptText)
-                Button("Создать и переместить") { store.createGroupAndMove(host.name, promptText); promptText = ""; prompt = nil }
-                Button("Только создать") { store.createGroup(promptText); promptText = ""; prompt = nil }
-                Button("Отмена", role: .cancel) { promptText = ""; prompt = nil }
-            } else {
-                TextField("Имя тега", text: $promptText)
-                Button("Создать и применить") { store.createTagAndAssign(host.name, promptText); promptText = ""; prompt = nil }
-                Button("Отмена", role: .cancel) { promptText = ""; prompt = nil }
-            }
-        } message: {
-            Text(prompt == .newGroup ? "Переместить хост в новую группу" : "Создать тег и добавить его хосту")
         }
     }
 
