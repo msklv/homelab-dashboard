@@ -116,9 +116,20 @@ public enum QuickAdd {
         let s = address.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !s.isEmpty else { return "Строка пуста" }
         guard let d = parse(s, currentUser: currentUser) else { return "Не распознан адрес: \(s)" }
+        // Уникальность хоста — по всей строке подключения ssh: (а не по имени).
         if config.hosts.contains(where: { $0.ssh == d.ssh }) { return "Такой хост уже есть: \(d.ssh)" }
-        if config.hosts.contains(where: { $0.name == d.name }) { return "Имя \(d.name) уже занято" }
-        config.hosts.append(HostConfig(name: d.name, ssh: d.ssh))
+        // Имя — лишь отображаемая подпись: при совпадении с уже занятым (разные ssh:,
+        // напр. несколько логинов на одном bastion) автоматически делаем уникальным,
+        // а не отклоняем добавление.
+        config.hosts.append(HostConfig(name: uniqueName(config.hosts, base: d.name), ssh: d.ssh))
         return nil
+    }
+
+    /// Даёт незанятое имя: base, либо `base 2`, `base 3`… пока не встретится свободное.
+    static func uniqueName(_ existing: [HostConfig], base: String) -> String {
+        if !existing.contains(where: { $0.name == base }) { return base }
+        var n = 2
+        while existing.contains(where: { $0.name == "\(base) \(n)" }) { n += 1 }
+        return "\(base) \(n)"
     }
 }

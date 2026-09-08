@@ -800,6 +800,18 @@ private struct LogRow: View {
         .padding(.vertical, 3)
         .background(highlight.opacity(entry.level == .info ? 0 : 0.5))
         .clipShape(RoundedRectangle(cornerRadius: 5))
+        .contextMenu {
+            Button("Копировать текст") {
+                let text = entry.source.isEmpty ? entry.message : "[\(entry.source)] \(entry.message)"
+                NSPasteboard.general.clearContents()
+                NSPasteboard.general.setString(text, forType: .string)
+            }
+            Button("Копировать с временем") {
+                let text = "\(entry.time) " + (entry.source.isEmpty ? entry.message : "[\(entry.source)] \(entry.message)")
+                NSPasteboard.general.clearContents()
+                NSPasteboard.general.setString(text, forType: .string)
+            }
+        }
     }
 
     private var dotColor: Color {

@@ -492,9 +492,10 @@ func testQuickAdd() {
     let e2 = QuickAdd.append(to: &c2, address: "u@h", currentUser: u)
     ok(e2 != nil && c2.hosts.count == 2, "duplicate ssh rejected")
     let e3 = QuickAdd.append(to: &c2, address: "user@a", currentUser: u)
-    ok(e3 != nil && c2.hosts.count == 2, "duplicate name rejected")
+    ok(e3 == nil && c2.hosts.count == 3 && c2.hosts.last?.name == "a 2",
+       "same host-part name, different ssh: добавляется с уникальным именем")
     let e4 = QuickAdd.append(to: &c2, address: "  ", currentUser: u)
-    ok(e4 != nil && c2.hosts.count == 2, "blank rejected")
+    ok(e4 != nil && c2.hosts.count == 3, "blank rejected")
 }
 
 func testYamlRoundTrip() throws {
