@@ -17,8 +17,8 @@ public struct HostSnapshot: Equatable, Sendable {
     public var cores: Int?
     public var ramTotal: UInt64?        // bytes
     public var ramUsedPct: Double?
-    public var diskTotal: UInt64?       // bytes — суммарный объём ФИЗИЧЕСКИХ дисков
-    public var diskAvail: UInt64?       // bytes — свободно на размонтированном-корневом разделе
+    public var diskTotal: UInt64?       // bytes — объём ФС корневого раздела /
+    public var diskAvail: UInt64?       // bytes — свободно на корневом разделе /
     public var diskKind: String?        // nvme / ssd / hdd
     public var uptimeSec: UInt64?
     public var tempC: Double?
@@ -165,8 +165,10 @@ public enum CommandBatch {
     /// собирает ВСЕ метрики. Что недоступно на конкретной ОС — отдаётся пустым →
     /// парсер трактует как N/A. На хосте ничего не ставится; только стандартные утилиты.
     ///
-    /// * Диск: суммарный объём ФИЗИЧЕСКИХ дисков (без сетевых/монтируемых томов).
-    ///   Linux — `lsblk` (целые диски), macOS — `diskutil list` (internal-physical).
+    /// * Диск (total + avail): объём и свободное место ФС КОРНЕВОГО раздела `/`
+    ///   (`df /`). На однонишниковых серверах совпадает с объёмом диска;
+    ///   это тот же раздел, размер которого показывается в шапке карточки.
+    ///   Не сумма физических дисков. Тип диска (`DISKKIND`) определяется отдельно.
     /// * Температура: Linux — `/sys/class/thermal` (CPU-зоны и плата); macOS —
     ///   нечитаема без root (`powermetrics` требует sudo) → N/A.
     /// * Аплинк: самая быстрая поднятая физическая пасс-скорость (Linux `/sys/class/net/*/speed`,
@@ -180,7 +182,7 @@ public enum CommandBatch {
             "boot=$(sysctl -n kern.boottime | awk -F'[,=]' '{gsub(/[^0-9]/,\"\",$2); print $2}'); u=$(( $(date +%s) - boot )); echo HL_UPTIME=$u",
             "total=$(sysctl -n hw.memsize); ps=$(sysctl -n hw.pagesize)",
             "act=$(vm_stat | awk '/Pages active/{print $3}' | tr -d '.'); ina=$(vm_stat | awk '/Pages inactive/{print $3}' | tr -d '.'); spec=$(vm_stat | awk '/Pages speculative/{print $3}' | tr -d '.'); fb=$(vm_stat | awk '/File-backed pages/{print $3}' | tr -d '.'); wd=$(vm_stat | awk '/Pages wired down/{print $4}' | tr -d '.'); oc=$(vm_stat | awk '/Pages occupied by compressor/{print $5}' | tr -d '.'); used=$(( ( (act+ina+spec-fb) + wd + oc ) * ps )); echo HL_MEM_TOTAL=$total; echo HL_MEM_USED=$used",
-            // Объём физических внутренних дисков (без NFS/сетевых и без задвоения APFS-слайсов).
+            // Объём и свободное место корневого раздела / (df /); раздел из шапки карточки.
             "echo HL_DISK_TOTAL=$(df -b 1 / 2>/dev/null | tail -1 | awk '{print $2*512}')",
             "echo HL_DISK_AVAIL=$(df -b 1 / 2>/dev/null | tail -1 | awk '{print $4*512}')",
             "bootproto=$(diskutil info / | awk -F: '/Protocol/{gsub(/ /,\"\",$2); print toupper($2)}'); case \"$bootproto\" in *SATA*) echo HL_DISKKIND=ssd;; *) echo HL_DISKKIND=nvme;; esac",
@@ -208,7 +210,7 @@ public enum CommandBatch {
             "echo HL_UPTIME=$(awk '{print int($1)}' /proc/uptime)",
             "echo HL_MEM_TOTAL=$(awk '/MemTotal/{print $2*1024}' /proc/meminfo)",
             "echo HL_MEM_USED=$(awk '/MemTotal/{t=$2} /MemAvailable/{a=$2} END{print (t-a)*1024}' /proc/meminfo)",
-            // Сумма объёма всех физических блочных дисков (без loop/zram) — «как на коробке».
+            // Объём и свободное место корневого раздела / (df /); раздел из шапки карточки.
             "echo HL_DISK_TOTAL=$(df -B1 / 2>/dev/null | tail -1 | awk '{print $2}')",
             "echo HL_DISK_AVAIL=$(df -B1 / 2>/dev/null | tail -1 | awk '{print $4}')",
             "echo HL_DISKKIND=$(lsblk -dbrno NAME,TYPE,ROTA 2>/dev/null | awk '$2 == \"disk\" && $1 !~ /^(loop|zram|ram)/ { if($1 ~ /nvme/) nv=1; else if($3==0) ss=1; else hd=1 } END { if(nv) print \"nvme\"; else if(ss) print \"ssd\"; else if(hd) print \"hdd\" }')",
