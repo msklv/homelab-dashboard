@@ -185,6 +185,8 @@ public enum CommandBatch {
             // Объём и свободное место корневого раздела / (df /); раздел из шапки карточки.
             "echo HL_DISK_TOTAL=$(df -b 1 / 2>/dev/null | tail -1 | awk '{print $2*512}')",
             "echo HL_DISK_AVAIL=$(df -b 1 / 2>/dev/null | tail -1 | awk '{print $4*512}')",
+            // Тип диска (macOS): по протоколу корневого устройства — SATA→ssd, иначе nvme.
+            // НЕДОЧЁТ: rotational не проверяется, поэтому SATA-HDD будет помечен ssd.
             "bootproto=$(diskutil info / | awk -F: '/Protocol/{gsub(/ /,\"\",$2); print toupper($2)}'); case \"$bootproto\" in *SATA*) echo HL_DISKKIND=ssd;; *) echo HL_DISKKIND=nvme;; esac",
             // Температура CPU/платы на macOS без root недоступна (powermetrics требует sudo).
             "echo HL_TEMP=",
