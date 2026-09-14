@@ -60,7 +60,7 @@ jobs:
           PLIST
           codesign --force --deep --sign - "$APP"
       - name: Upload .app artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: homelab-dashboard
           path: homelab-dashboard.app
