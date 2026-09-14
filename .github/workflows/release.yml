@@ -57,7 +57,7 @@ jobs:
       - name: Package zip
         run: ditto -c -k --keepParent homelab-dashboard.app homelab-dashboard-${{ github.ref_name }}.zip
       - name: Publish Release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ github.ref_name }}
           files: homelab-dashboard-${{ github.ref_name }}.zip
