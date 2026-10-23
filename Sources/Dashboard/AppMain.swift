@@ -10,6 +10,9 @@ final class DashboardStore: ObservableObject {
     @Published var errorMessage: String?
     @Published var pausedHosts: Set<String> = []
     @Published var collapsedGroups: Set<String> = []
+    /// Карточки с раскрытой GPU-панелью: их GPU опрашиваются дополнительным зондом.
+    /// Runtime-состояние (не персистится), но переживает hot-reload конфига.
+    @Published var gpuOpen: Set<String> = []
 
     public let log: LogStore
 
@@ -50,7 +53,7 @@ final class DashboardStore: ObservableObject {
     private func startPoller(with c: Config) {
         poller?.stop()
         poller = nil
-        let p = Poller(config: c, log: log, collapsedGroups: collapsedGroups)
+        let p = Poller(config: c, log: log, collapsedGroups: collapsedGroups, gpuPanels: gpuOpen)
         p.onUpdate = { [weak self] _, snap in
             DispatchQueue.main.async { self?.snapshots[snap.host.name] = snap }
         }
@@ -219,6 +222,19 @@ final class DashboardStore: ObservableObject {
         log.log(.info, name, pausing ? "Пауза опроса" : "Опрос возобновлён")
     }
 
+    // MARK: - GPU-панель карточки (ленивый опрос GPU)
+
+    /// Раскрыть/свернуть GPU-панель. Пока раскрыта — GPU опрашиваются каждым тиком
+    /// поллера; при закрытии опрос полностью прекращается, а кэш снимается.
+    func toggleGpuPanel(_ name: String) {
+        guard let host = config.hosts.first(where: { $0.name == name }),
+              let p = poller else { return }
+        let opening = !gpuOpen.contains(name)
+        if opening { gpuOpen.insert(name) } else { gpuOpen.remove(name) }
+        p.setGpuPanel(host, opening)
+        log.log(.info, name, opening ? "GPU-панель открыта — опрос GPU запущен" : "GPU-панель закрыта — опрос GPU остановлен")
+    }
+
     // MARK: - Свёрнутость групп (автопауза мониторинга)
 
     func isGroupCollapsed(_ name: String) -> Bool { collapsedGroups.contains(name) }
@@ -369,9 +385,15 @@ enum TerminalOpener {
         var err: NSDictionary?
         let ran = NSAppleScript(source: script)?.executeAndReturnError(&err)
         if ran == nil {
+            let code = err?[NSAppleScript.errorNumber] as? Int ?? 0
             let msg = err?[NSAppleScript.errorMessage] as? String ?? "неизвестная ошибка"
-            log?.log(.error, "terminal", "Не удалось открыть терминал (\(destination)): \(msg)")
-            NSLog("HLD: не удалось открыть терминал: %@", msg)
+            // -1743 = нет разрешения на управление Terminal (Автоматизация), в т.ч.
+            // когда в Info.plist приложения нет NSAppleEventsUsageDescription.
+            let hint = code == -1743
+                ? " — разрешите «Конфиденциальность и безопасность → Автоматизация → Terminal» для homelab-dashboard"
+                : ""
+            log?.log(.error, "terminal", "Не удалось открыть терминал (\(destination)): \(msg)\(hint)")
+            NSLog("HLD: не удалось открыть терминал: %@ (%d)", msg, code)
         } else {
             log?.log(.info, "terminal", "Открыт терминал: ssh \(destination)")
         }
@@ -429,7 +451,7 @@ enum AppIcon {
 
 /// Собственное окно «О программе»: имя автора, ник и ссылка на репозиторий.
 struct AboutView: View {
-    private let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "0.2.0"
+    private let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "0.3.0"
     private let repoURL = URL(string: "https://github.com/msklv/homelab-dashboard")!
 
     var body: some View {

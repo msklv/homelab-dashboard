@@ -266,7 +266,10 @@ struct HostGrid: View {
         let columns = [GridItem(.adaptive(minimum: 330, maximum: 520), spacing: 12)]
         LazyVGrid(columns: columns, alignment: .leading, spacing: 12) {
             ForEach(visible) { h in
-                HostCard(host: h)
+                // .equatable(): карточка-оболочка пересобирается только при изменении
+                // собственных полей (host), а НЕ на каждом опросе поллера. Без этого
+                // открытое контекстное меню мигало/переоткрывалось каждые 5 с.
+                HostCard(host: h, store: store).equatable()
             }
         }
     }
@@ -278,12 +281,30 @@ struct HostGrid: View {
 /// но в `body` НЕ читает `store.snapshot`/`pausedHosts`: любые обращения к
 /// ним вынесены в closures (меню/действия), чтобы частые обновления поллера
 /// не пересобирали открытое меню (иначе оно мигает/закрывается на macOS).
-struct HostCard: View {
+///
+/// ВАЖНО: store передаётся ОБЫЧНЫМ `let`, а не `@EnvironmentObject`/`@ObservedObject`.
+/// Любой из них подписывает вью на `objectWillChange` стора, т.е. на каждую
+/// публикацию снапшотов, и body пересобирается каждый тик поллера — открытое
+/// меню от этого закрывается. Вместе с `Equatable` (сравниваем только host)
+/// оболочка не пересобирается на обновлениях данных; живой контент — в
+/// `HostCardContent`, который подписан сам.
+struct HostCard: View, Equatable {
     let host: HostConfig
-    @EnvironmentObject private var store: DashboardStore
+    let store: DashboardStore
     @State private var showDelete = false
     @State private var prompt: HostPrompt?
     @State private var promptText = ""
+
+    /// Сравниваем только поля карточки: изменения снапшотов/пауз не должны
+    /// инвалидировать оболочку (иначе меню мигает на каждом опросе).
+    static func == (a: HostCard, b: HostCard) -> Bool {
+        a.host.name == b.host.name
+            && a.host.ssh == b.host.ssh
+            && a.host.group == b.host.group
+            && a.host.tags == b.host.tags
+            && a.host.pollInterval == b.host.pollInterval
+            && a.host.timeout == b.host.timeout
+    }
 
     var body: some View {
         HostCardContent(host: host)
@@ -381,6 +402,13 @@ struct HostCardContent: View {
             header(s)
             specsLine(s)
             metricsBlock(s)
+            // GPU-панель: раскрывается кнопкой GPU в шапке; карточка плавно
+            // растёт вниз (withAnimation в кнопке + transition строки панели).
+            // Пока закрыта — GPU на хосте вообще не опрашиваются.
+            if s.hasGpu == true, store.gpuOpen.contains(host.name) {
+                gpuPanel(s)
+                    .transition(.opacity)
+            }
             tagRow
         }
         .padding(11)
@@ -437,6 +465,24 @@ struct HostCardContent: View {
             }
             .buttonStyle(.plain)
             .help("Открыть SSH-терминал: \(host.ssh)")
+            // Кнопка GPU — видна только если на хосте обнаружен GPU. Подсвечивается,
+            // когда панель раскрыта (и GPU в этот момент опрашиваются).
+            if s.hasGpu == true {
+                let open = store.gpuOpen.contains(host.name)
+                Button {
+                    withAnimation(.easeInOut(duration: 0.28)) { store.toggleGpuPanel(host.name) }
+                } label: {
+                    Image(systemName: "cpu")
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundColor(open ? .white : LevelColor.accent)
+                        .frame(width: 18, height: 18)
+                        .background(open ? LevelColor.accent : Color.clear)
+                        .clipShape(RoundedRectangle(cornerRadius: 5, style: .continuous))
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .help(open ? "Свернуть GPU-мониторинг" : "Показать GPU (VRAM + загрузка)")
+            }
             Spacer()
             statusDot(s)
             Text(Format.ping(s.pingMs))
@@ -538,6 +584,38 @@ struct HostCardContent: View {
         }
     }
 
+    // MARK: GPU-панель (раскрывается кнопкой GPU; опрос идёт, только пока открыта)
+
+    /// Компактная панель по одной строке на GPU: кольцо загрузки %, имя и полоса
+    /// VRAM «занято / всего» в пороговых цветах. Данные пустые/нет — подсказка.
+    /// ВАЖНО: все состояния панели (строки GPU, подсказка, «опрашиваю») имеют
+    /// ФИКСИРОВАННУЮ высоту строки — обновление данных не должно менять высоту
+    /// карточки (иначе нижний край скачет при каждом опросе).
+    @ViewBuilder private func gpuPanel(_ s: HostSnapshot) -> some View {
+        VStack(alignment: .leading, spacing: 5) {
+            Divider()
+            if let gpus = s.gpus, !gpus.isEmpty {
+                ForEach(Array(gpus.enumerated()), id: \.offset) { _, g in
+                    GpuRow(gpu: g, thresholds: store.config.thresholds)
+                }
+            } else {
+                // либо зонд ещё в полёте (s.gpus == nil), либо метрик нет.
+                // Обе ветки — ровно один слот высотой GpuRow.height.
+                HStack(spacing: 6) {
+                    if s.gpus == nil {
+                        ProgressView().controlSize(.mini)
+                    }
+                    Text(s.gpus == nil ? "опрашиваю GPU…" : "метрик GPU нет (нужен nvidia-smi / Apple Silicon)")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                        .lineLimit(1)
+                    Spacer(minLength: 0)
+                }
+                .frame(height: GpuRow.height, alignment: .leading)
+            }
+        }
+    }
+
     @ViewBuilder private var tagRow: some View {
         if !host.tags.isEmpty {
             HStack(spacing: 6) {
@@ -567,6 +645,79 @@ struct HostCardContent: View {
         case .linux: return "Linux"
         case .unknown: return "—"
         }
+    }
+}
+
+// MARK: - Строка GPU
+
+/// Одна GPU: компактное кольцо загрузки ядра + имя + полоса VRAM с цифрами
+/// «занято / всего». Цвета — общие пороги warning/critical, как у CPU/RAM.
+struct GpuRow: View {
+    let gpu: GpuInfo
+    let thresholds: Thresholds
+
+    var body: some View {
+        HStack(spacing: 8) {
+            ZStack {
+                Circle().stroke(utilColor.opacity(0.15), lineWidth: 3.5)
+                Circle()
+                    .trim(from: 0, to: min(1, max(0, shownPct / 100)))
+                    .stroke(utilColor, style: StrokeStyle(lineWidth: 3.5, lineCap: .round))
+                    .rotationEffect(.degrees(-90))
+                    .animation(.easeOut(duration: 0.4), value: gpu.utilPct)
+                Text(Format.percent(gpu.utilPct))
+                    .font(.system(size: 8.5, weight: .bold, design: .rounded))
+                    .monospacedDigit()
+            }
+            .frame(width: 30, height: 30)
+            .help("Загрузка GPU: \(Format.percent(gpu.utilPct))")
+
+            VStack(alignment: .leading, spacing: 2) {
+                HStack(spacing: 6) {
+                    Text(shortName)
+                        .font(.caption.weight(.medium))
+                        .lineLimit(1)
+                    Spacer(minLength: 4)
+                    Text("\(Format.bytes(gpu.memUsed)) / \(Format.bytes(gpu.memTotal))")
+                        .font(.caption2.monospacedDigit())
+                        .foregroundColor(.secondary)
+                        .fixedSize()
+                }
+                GeometryReader { geo in
+                    ZStack(alignment: .leading) {
+                        Capsule().fill(Color.secondary.opacity(0.15))
+                        if let p = gpu.memUsedPct {
+                            let w = geo.size.width * CGFloat(min(max(p, 0), 100)) / 100
+                            Capsule()
+                                .fill(vramColor)
+                                .frame(width: max(w, 3))
+                                .animation(.easeOut(duration: 0.4), value: p)
+                        }
+                    }
+                }
+                .frame(height: 4)
+            }
+        }
+        // Фиксированная высота строки: обновление метрик не меняет высоту карточки,
+        // поэтому нижний край не скачет при каждом опросе.
+        .frame(height: Self.height, alignment: .leading)
+    }
+
+    /// Высота одной строки GPU (равна кольцу 30pt). Используется и плейсхолдером
+    /// панели, чтобы переход «опрашиваю» → данные не менял высоту.
+    static let height: CGFloat = 30
+
+    private var shownPct: Double { gpu.utilPct > 0 ? max(gpu.utilPct, 8) : 0 }
+    private var utilColor: Color { LevelColor.forPct(gpu.utilPct, thresholds) }
+    private var vramColor: Color { LevelColor.forPct(gpu.memUsedPct, thresholds) }
+
+    /// Имя GPU компактно: отрезаем вендорные префиксы, чтобы строка не расползалась.
+    private var shortName: String {
+        var n = gpu.name
+        for prefix in ["NVIDIA GeForce ", "NVIDIA ", "AMD Radeon ", "Radeon "] {
+            if n.hasPrefix(prefix) { n = String(n.dropFirst(prefix.count)); break }
+        }
+        return n
     }
 }
 

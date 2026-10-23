@@ -18,6 +18,9 @@ public final class Poller {
     private var running = false
     private var pausedHosts: Set<String> = []
     private var collapsedGroups: Set<String> = []
+    /// Хосты с раскрытой GPU-панелью: их GPU-метрики опрашиваются дополнительным
+    /// зондом в каждом тике. Пока панель закрыта — GPU не опрашивается никогда.
+    private var gpuPanels: Set<String> = []
     /// Runtime-множество свёрнутых на время жизни поллера групп.
     public var collapsedGroupNames: Set<String> { lock.lock(); defer { lock.unlock() }; return collapsedGroups }
 
@@ -29,13 +32,14 @@ public final class Poller {
     }
 
     public init(config: Config, ssh: SshRunner = SshRunner(), pinger: PingRunner = PingRunner(),
-                log: LogStore? = nil, collapsedGroups: Set<String> = []) {
+                log: LogStore? = nil, collapsedGroups: Set<String> = [], gpuPanels: Set<String> = []) {
         self.config = config
         self.ssh = ssh
         self.pinger = pinger
         self.log = log
         self.sem = DispatchSemaphore(value: max(1, config.maxConcurrent))
         self.collapsedGroups = collapsedGroups
+        self.gpuPanels = gpuPanels
     }
 
     private func state(for name: String) -> HostState {
@@ -183,11 +187,88 @@ public final class Poller {
         return g.isEmpty ? Config.unknownGroupName : g
     }
 
+    // MARK: GPU-панель (ленивый опрос)
+
+    /// Открыта ли GPU-панель хоста (её GPU-метрики опрашиваются).
+    public func isGpuPanelOpen(_ name: String) -> Bool {
+        lock.lock(); defer { lock.unlock() }
+        return gpuPanels.contains(name)
+    }
+
+    /// Раскрытие/сворачивание GPU-панели. При раскрытии — мгновенный GPU-зонд в фоне;
+    /// при сворачивании — кэш GPU-снимка сбрасывается, чтобы повторное раскрытие
+    /// показывало только живые данные. Пока панель закрыта, GPU не опрашивается никогда.
+    public func setGpuPanel(_ host: HostConfig, _ open: Bool) {
+        lock.lock()
+        if open { gpuPanels.insert(host.name) } else { gpuPanels.remove(host.name) }
+        lock.unlock()
+        if open {
+            DispatchQueue.global(qos: .utility).async { [weak self] in
+                guard let self, self.isGpuPanelOpen(host.name) else { return }
+                self.collectGpuOnce(host)
+            }
+        } else {
+            // сброс кэша + публикация (UI сразу гасит панель)
+            let st = state(for: host.name)
+            st.lock.lock()
+            var snap = st.last
+            let changed = snap?.gpus != nil
+            snap?.gpus = nil
+            if changed { st.last = snap }
+            st.lock.unlock()
+            if changed, let snap { onUpdate?(host, snap) }
+        }
+    }
+
+    /// Одиночный GPU-зонд: вторая ssh-сессия с дешёвой gpuProbe-командой.
+    /// Результат приклеивается к последнему снапшоту хоста (или к пустому, если
+    /// основной опрос ещё не отработал). Ненулевой exit — тихо игнорируем:
+    /// GPU-метрики не должны влиять на статус хоста.
+    /// Пустой/частичный ответ НЕ обнуляет уже показанные значения (держим последние
+    /// живые) — иначе панель схлопывается и нижний край карточки прыгает на каждом
+    /// тике. Публикуем снапшот только если данные реально изменились.
+    @discardableResult
+    public func collectGpuOnce(_ host: HostConfig) -> [GpuInfo] {
+        let acquired = sem.wait(timeout: .now() + .seconds(30)) == .success
+        defer { if acquired { sem.signal() } }
+
+        let probe = CommandBatch.gpuProbe(for: host)
+        let res = ssh.run(host, timeout: config.timeout(for: host), batch: probe)
+        guard res.exitCode == 0 else { return [] }
+        let gpus = GpuParser.parse(res.stdout)
+
+        let st = state(for: host.name)
+        st.lock.lock()
+        var snap = st.last ?? HostSnapshot(host: host)
+        // «последние живые» берём и из st.last, и из st.prev — основной опрос
+        // переносит gpus именно из prev, и после панельного зонда они могут
+        // разъехаться, если prev не обновили (тогда панель гаснет на тик).
+        let previous = snap.gpus ?? st.prev?.snapshot.gpus
+        if !gpus.isEmpty {
+            snap.gpus = gpus
+        } else if previous == nil {
+            // зонд ответил, но GPU не нашёл — фиксируем «данных нет» один раз
+            snap.gpus = []
+        } else {
+            snap.gpus = previous
+        }
+        if st.prev != nil {
+            st.prev?.snapshot.gpus = snap.gpus
+        }
+        let changed = snap.gpus != previous
+        st.last = snap
+        st.lock.unlock()
+        if changed { onUpdate?(host, snap) }
+        return gpus
+    }
+
     public func tick(_ host: HostConfig) {
         if isPaused(host.name) { return }
         // свёрнутая группа: мониторинг карточек приостановлен
         if isCollapsedGroup(effectiveGroup(host)) { return }
         _ = collectOnce(host)
+        // GPU-метрики — только пока панель карточки раскрыта кнопкой GPU
+        if isGpuPanelOpen(host.name) { _ = collectGpuOnce(host) }
     }
 
     public func snapshot(for name: String) -> HostSnapshot? {

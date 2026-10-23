@@ -53,6 +53,8 @@ jobs:
           	<string>public.app-category.utilities</string>
           	<key>LSMinimumSystemVersion</key>
           	<string>13.0</string>
+          	<key>NSAppleEventsUsageDescription</key>
+          	<string>Кнопка «терминал» открывает Terminal и запускает в нём ssh к выбранному хосту.</string>
           	<key>NSHighResolutionCapable</key>
           	<true/>
           </dict>

@@ -113,11 +113,44 @@ func testCommands() {
     ok(batch.contains("sysctl"), "batch probes sysctl (macos)")
     ok(batch.contains("HL_OS=linux") && batch.contains("HL_OS=macos"), "os auto-detected in-shell")
     ok(batch.contains("0|-1) s="), "linux link: speed -1/0/empty treated as unknown (virtio vm)")
+    // Регрессия TrueNAS: у zsh несовпавший глоб роняет всю -c-строку (exit 1) → хост
+    // ложно offline. Батч обязан выставлять null_glob до первого глоба.
+    ok(batch.contains("setopt null_glob"), "batch guards zsh null_glob (no-match glob != fatal)")
+    if let g = batch.range(of: "setopt null_glob")?.lowerBound,
+       let t = batch.range(of: "thermal_zone*")?.lowerBound {
+        ok(g < t, "null_glob set BEFORE any glob in batch")
+    } else { ok(false, "thermal_zone* glob есть в батче") }
 
     print("-- OutputParser --")
     let kv = OutputParser.keyValues("x\nHL_CORES=12\nHL_CPU=2.5\n")
     eq(kv["HL_CORES"], "12", "kv cores")
     eq(kv["HL_CPU"], "2.5", "kv cpu")
+
+    print("-- Temperature sources (priority list) --")
+    ok(batch.contains("k10temp") && batch.contains("coretemp"), "temp: hwmon CPU-датчики в приоритете (k10temp/coretemp)")
+    ok(batch.contains("nct6") && batch.contains("it87"), "temp: hwmon SuperIO → плата")
+    ok(batch.contains("HL_TEMP_BOARD"), "temp: плата отдельным полем")
+    if let hw = batch.range(of: "k10temp")?.lowerBound, let acp = batch.range(of: "acpitz")?.lowerBound {
+        ok(hw < acp, "temp: acpitz только как fallback (после hwmon)")
+    } else {
+        ok(false, "temp: в батче есть и hwmon-, и acpitz-источники")
+    }
+
+    print("-- GPU probe batch --")
+    let probe = CommandBatch.gpuProbe(for: HostConfig(name: "gpu-01", ssh: "r@h"))
+    ok(probe.contains("nvidia-smi") && probe.contains("utilization.gpu"), "gpuProbe linux: nvidia-smi CSV")
+    ok(probe.contains("mem_info_vram_total"), "gpuProbe linux: amdgpu sysfs fallback")
+    // AMD: имя карты из lspci/pci.ids, а не «cardN» из имени каталога sysfs
+    ok(probe.contains("lspci") && probe.contains("pci.ids"), "gpuProbe linux: имя AMD из lspci/pci.ids")
+    ok(probe.contains("mem_info_vram_used") && probe.contains("gpu_busy_percent"), "gpuProbe linux: amdgpu VRAM/util")
+    ok(!probe.contains("basename $(dirname $c)"), "gpuProbe linux: имя GPU не подменяется на cardN")
+    ok(probe.contains("AGXAccelerator") && probe.contains("Device Utilization %"), "gpuProbe mac: AGX utilization")
+    ok(probe.contains("iogpu.wired_limit_mb"), "gpuProbe mac: VRAM total из лимита wired")
+    ok(probe.contains("In use system memory") && !probe.contains("In use system memory (driver)="),
+       "gpuProbe mac: точное поле used без (driver)-варианта")
+    ok(batch.contains("HL_GPU"), "main batch has GPU presence flag")
+    ok(!batch.contains("query-gpu") && !batch.contains("PerformanceStatistics"),
+       "main batch НЕ запускает GPU-зонд (только дешёвый флаг; метрики — отдельный запрос)")
 }
 
 func shell(_ cmd: String) -> String? {
@@ -150,10 +183,17 @@ func testCpuTopParse() {
                 // ранее баг: паттерн /%Cpu/ (нижний регистр) не матчил строку top "%CPU(s):"
                 close(cpuProg(["%CPU(s):  15.9 us,  0.0 sy,  0.0 ni, 84.1 id,  0.0 wa,  0.0 hi,  0.0 si,  0.0 st"]) ?? -1, 15.9, "modern %CPU(s): -> 100-idle", 0.05)
                 close(cpuProg(["Cpu(s):  91.8 us,  0.0 sy,  0.0 ni,  8.2 id,  0.0 wa,  0.0 hi,  0.0 si,  0.0 st"]) ?? -1, 91.8, "legacy Cpu(s): (no %) -> 100-idle", 0.05)
+                // ранее баг: на гостевых top при idle=100.0 значение слипает с меткой ("ni,100.0"),
+                // все поля сдвигаются и позиционный парсер (100-$8) читал "id," как 0 -> ложный CPU 100%.
+                close(cpuProg(["%CPU(s):  0.0 us,  0.0 sy,  0.0 ni,100.0 id,  0.0 wa,  0.0 hi,  0.0 si,  0.0 st"]) ?? -1, 0.0, "glued 'ni,100.0 id,' (idle=100.0) -> 0, not 100", 0.05)
                 // топ -bn2: 1-я строка = среднее с загрузки, 2-я = живой интервал. awk должен брать ПОСЛЕДНЮЮ.
                 let two = cpuProg(["Cpu(s):  40.0 us,  0.0 sy,  0.0 ni, 60.0 id,  0.0 wa,  0.0 hi,  0.0 si,  0.0 st",
                                    "Cpu(s):  3.0 us,  0.0 sy,  0.0 ni, 97.0 id,  0.0 wa,  0.0 hi,  0.0 si,  0.0 st"]) ?? -1
                 close(two, 3.0, "last (live) cpu line wins, not boot-average", 0.05)
+                // ранее баг: на хосте с LANG=ru_RU top печатает "97,3 id"; gsub(/,/) сносит
+                // и десятичную запятую -> токены "97 3 id", парсер брал "3" -> ложные 97%.
+                // Лечение: LC_ALL=C в батче. Проверяем саму команду батча.
+                ok(batch.contains("LC_ALL=C top -bn2 -d 1"), "linux CPU batch forces LC_ALL=C (ru-comma locale fix)")
             }
 
     func testMacCpuParse() {
@@ -169,6 +209,9 @@ func testCpuTopParse() {
         let script = "printf '%s\\n' \"CPU usage: 4.00% user, 2.00% sys, 94.00% idle\" \"CPU usage: 12.00% user, 3.00% sys, 85.00% idle\" | awk '" + awkProg + "'"
         guard let out = shell(script), let v = Double(out) else { ok(false, "mac awk cpu выполнился"); return }
         close(v, 15.0, "last (live) mac cpu: 100-85=15", 0.05)
+        // аналог linux-бага: при idle=100.00 top слипает значение с меткой ("sys,100.00% idle") -> должен быть 0, не 100
+        let glued = "printf '%s\\n' \"CPU usage: 0.00% user, 0.00% sys,100.00% idle\" | awk '" + awkProg + "'"
+        if let out = shell(glued), let g = Double(out) { close(g, 0.0, "glued 'sys,100.00% idle' -> 0, not 100", 0.05) }
     }
 
     func testLinuxNetFilter() {
@@ -631,6 +674,114 @@ func testSshPort() {
        "tail login:token@host:port -> -p port + destination как есть")
 }
 
+// MARK: - GPU: парсер и ленивый опрос
+
+func testGpu() throws {
+    print("-- GPU parser --")
+    let out = """
+    __HOMELAB_START__
+    HL_GPU=Apple M4 Max|38654705664|1973649408|9
+    HL_GPU=NVIDIA GeForce RTX 4090|25757220864|6514802688|42
+    HL_GPU=битая строка
+    HL_GPU=|1|2|3
+    HL_GPU=ok|1|abc|3
+    """
+    let gpus = GpuParser.parse(out)
+    eq(gpus.count, 2, "парсятся только валидные HL_GPU-строки")
+    eq(gpus.first?.name, "Apple M4 Max" as String?, "первая GPU — имя")
+    close(gpus.first?.memUsedPct ?? -1, 1_973_649_408 / 38_654_705_664.0 * 100, "memUsedPct = used/total*100", 0.01)
+    eq(gpus.last?.name, "NVIDIA GeForce RTX 4090" as String?, "вторая GPU (nvidia) имя")
+    close(gpus.last?.utilPct ?? -1, 42, "util pct 42")
+    // util за пределами 0–100 клампится
+    let clamped = GpuParser.parseLine("G|10|1|140")
+    eq(clamped?.utilPct, 100, "util >100 clamp к 100")
+    ok(GpuParser.parseLine("G|10|1|140") != nil, "клампинг не роняет строку")
+
+    print("-- SampleEngine: hasGpu + кэш gpus --")
+    let h = HostConfig(name: "gpu-host", ssh: "r@h")
+    let t0 = Date(timeIntervalSince1970: 2000)
+    let t1 = Date(timeIntervalSince1970: 2010)
+    let s1 = try SampleEngine.apply("HL_OS=linux\nHL_GPU=1", host: h, pingMs: nil, previous: nil, now: t0)
+    eq(s1.snapshot.hasGpu, true, "HL_GPU=1 -> hasGpu true")
+    ok(s1.snapshot.gpus == nil, "основной батч не несёт gpus")
+    let s1z = try SampleEngine.apply("HL_OS=linux\nHL_GPU=0", host: h, pingMs: nil, previous: nil, now: t0)
+    eq(s1z.snapshot.hasGpu, false, "HL_GPU=0 -> hasGpu false")
+    let s1n = try SampleEngine.apply("HL_OS=linux", host: h, pingMs: nil, previous: nil, now: t0)
+    ok(s1n.snapshot.hasGpu == nil, "нет HL_GPU -> nil (не определяли)")
+    // gpus из previous переносятся в свежий снапшот (кэш панели живёт между опросами)
+    var cached = s1.snapshot
+    cached.gpus = [GpuInfo(name: "RTX", memTotal: 1000, memUsed: 500, utilPct: 10)]
+    let prevState = SampleState(snapshot: cached, counters: s1.counters, timestamp: t0)
+    let s2 = try SampleEngine.apply("HL_OS=linux\nHL_GPU=1", host: h, pingMs: nil, previous: prevState, now: t1)
+    eq(s2.snapshot.gpus?.count, 1, "gpus из previous перенесены")
+    eq(s2.snapshot.gpus?.first?.name, "RTX" as String?, "кэш GPU-имени перенесён")
+
+    print("-- Poller: GPU опрашивается только при открытой панели --")
+    var c = Config(); c.offlineAfterMisses = 2
+    let host = HostConfig(name: "gpu1", ssh: "user@192.0.2.21")
+    c.hosts = [host]
+    // executor отличает GPU-пробу от основного батча по маркерам, которых нет
+    // в основном батче (query-gpu / PerformanceStatistics)
+    final class GpuAwareExecutor: CommandExecuting {
+        let rec = CallRecorder()
+        let mainOut = "HL_OS=linux\nHL_CORES=8\nHL_GPU=1\n"
+        var probes = 0
+        /// true — зонд отвечает успешно, но без GPU-строк (транзиентный сбой nvidia-smi)
+        var emptyProbes = false
+        func run(_ argv: [String]) -> ExecResult {
+            rec.calls.append(argv.joined(separator: " "))
+            if argv.first?.contains("ping") == true {
+                return ExecResult(exitCode: 0, stdout: "round-trip min/avg/max = 1.000/2.500/4.000 ms")
+            }
+            let joined = argv.joined(separator: " ")
+            if joined.contains("query-gpu") || joined.contains("PerformanceStatistics") {
+                probes += 1
+                if emptyProbes { return ExecResult(exitCode: 0, stdout: "__HOMELAB_START__\n") }
+                return ExecResult(exitCode: 0, stdout: "__HOMELAB_START__\nHL_GPU=NVIDIA RTX 4090|25757220864|6514802688|42\n")
+            }
+            return ExecResult(exitCode: 0, stdout: mainOut)
+        }
+    }
+    let ex = GpuAwareExecutor()
+    let p = Poller(config: c, ssh: SshRunner(executor: ex), pinger: PingRunner(executor: ex))
+    ok(!p.isGpuPanelOpen("gpu1"), "панель по умолчанию закрыта")
+    p.collectOnce(host)
+    eq(ex.probes, 0, "закрытая панель: GPU-зонд НЕ выполнялся")
+    let snapClosed = p.snapshot(for: "gpu1")
+    ok(snapClosed?.hasGpu == true && snapClosed?.gpus == nil, "есть флаг hasGpu, но данных GPU нет")
+    // тики с закрытой панелью тоже не трогают GPU
+    p.tick(host)
+    eq(ex.probes, 0, "tick с закрытой панелью: зонда нет")
+    // открытие — мгновенный зонд (фон) + тики с открытой панелью опрашивают GPU
+    p.setGpuPanel(host, true)
+    ok(p.isGpuPanelOpen("gpu1"), "isGpuPanelOpen после открытия")
+    var waited = 0
+    while ex.probes == 0 && waited < 50 { usleep(20_000); waited += 1 }
+    ok(ex.probes >= 1, "открытие панели -> мгновенный GPU-зонд в фоне")
+    let beforeTick = ex.probes
+    p.tick(host)
+    ok(ex.probes > beforeTick, "tick с открытой панелью доопрашивает GPU")
+    let snapOpen = p.snapshot(for: "gpu1")
+    eq(snapOpen?.gpus?.count, 1, "снапшот содержит GPU")
+    close(snapOpen?.gpus?.first?.utilPct ?? -1, 42, "util 42 из пробы")
+    eq(snapOpen?.gpus?.first?.memTotal, 25_757_220_864, "VRAM total из MiB*1048576")
+    // пустой ответ зонда НЕ обнуляет показанное: иначе панель схлопывается и
+    // нижний край карточки прыгает на каждом тике
+    ex.emptyProbes = true
+    p.tick(host)
+    let snapAfterEmpty = p.snapshot(for: "gpu1")
+    eq(snapAfterEmpty?.gpus?.count, 1, "пустой ответ зонда сохраняет последние GPU-метрики")
+    close(snapAfterEmpty?.gpus?.first?.utilPct ?? -1, 42, "значения не сброшены в 0")
+    ex.emptyProbes = false
+    // закрытие — кэш сброшен, зондов больше нет
+    p.setGpuPanel(host, false)
+    ok(p.snapshot(for: "gpu1")?.gpus == nil, "закрытие панели сбрасывает кэш GPU")
+    let afterClose = ex.probes
+    p.tick(host)
+    eq(ex.probes, afterClose, "закрытая панель после открытия: зондов нет")
+    // GPU-проба не влияет на статус: хост остаётся online даже при пустом выводе
+}
+
 // MARK: - main
 
 
@@ -646,6 +797,7 @@ do {
     testLinuxNetFilter()
     testSshPort()
     try testSampleEngine()
+    try testGpu()
     testPoller()
     testWatcher()
 

@@ -36,12 +36,14 @@ func runSelfTest(configPath: String, rounds: Int = 3) -> Int32 {
 
 func dump(_ s: HostSnapshot) -> String {
     let temp = s.tempC.map { String(format: "%.0f°C", $0) } ?? "N/A"
+    let gpu = (s.gpus ?? []).map { "\($0.name) \(Format.percent($0.utilPct)) VRAM \(Format.bytes($0.memUsed))/\(Format.bytes($0.memTotal))" }.joined(separator: ", ")
     return "\(s.host.name) [\(s.os.rawValue)] status=\(statusName(s.status)) " +
         "ping=\(Format.ping(s.pingMs)) cpu=\(Format.percent(s.cpuPct)) " +
         "ram=\(Format.percent(s.ramUsedPct))/\(Format.bytes(s.ramTotal)) " +
         "disk=\(Format.bytes(s.diskTotal)) up=\(s.uptimeText ?? "-") temp=\(temp) " +
         "net=↑\(Format.bytesPerSecond(s.netUp))/↓\(Format.bytesPerSecond(s.netDown)) " +
-        "dio=R\(Format.bytesPerSecond(s.diskRead))/W\(Format.bytesPerSecond(s.diskWrite)) link=\(s.linkMbps.map(String.init) ?? "-") hn=\(s.hostname ?? "-")"
+        "dio=R\(Format.bytesPerSecond(s.diskRead))/W\(Format.bytesPerSecond(s.diskWrite)) link=\(s.linkMbps.map(String.init) ?? "-") hn=\(s.hostname ?? "-")" +
+        (s.hasGpu == true ? " gpu=[\(gpu)]" : "")
 }
 
 private func statusName(_ s: HostStatus) -> String {

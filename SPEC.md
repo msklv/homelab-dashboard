@@ -131,12 +131,15 @@ hosts:
 | Disk total | **корневой раздел** `df -B1 /` | **корневой раздел** `df -b 1 /` ×512 (APFS-контейнер) | десятичные GB |
 | Disk kind | `lsblk -dbrno name,type,rota`, приоритет **nvme>ssd>hdd** | `diskutil info /` Protocol → nvme/ssd | бейдж типа диска |
 | Uptime | `/proc/uptime` | `sysctl kern.boottime` | сек → «Xd Yh» |
-| Температура | thermal zones (`x86_pkg_temp`/`cpu_thermal`/…) temp + board | **N/A** (нужен root/powermetrics) | на mac — прочерк |
+| Температура | приоритетный список: 1) hwmon `k10temp`/`zenpower`/`coretemp`/`cpu_thermal` (CPU) и `nct6xxx`/`it87`/`f718xx`/`asus`/`dell_smm`/`thinkpad` (плата); 2) thermal zones package-типа (CPU) и прочие (плата); 3) `acpitz` — только как CPU-fallback (на многих платах это заглушка 20 °C) | **N/A** (нужен root/powermetrics) | на mac — прочерк; плата без SuperIO-датчика остаётся `N/A` |
 | Аплинк | `speed` интерфейса **маршрута по умолчанию** (`/proc/net/route`, фильтр виртуальных) | max `*baseT` из `ifconfig -l` | бейдж 100/1G/2.5G/10G |
 | Сеть ↑/↓ | `/proc/net/dev` rx/tx дельта | `netstat -ib` rx/tx дельта | `B/s`→`K/s` |
 | Диск I/O R/W | `/proc/diskstats` (поле 3, sectors×512) дельта | `iostat -w 1 -c 2` (R; W → N/A) | `B/s` |
+| Наличие GPU (флаг) | `nvidia-smi` в PATH ИЛИ amdgpu sysfs `mem_info_vram_total` | AGX-акселератор в `ioreg` (или PCI-класс 0300) | `HL_GPU=0/1`, включает кнопку GPU |
+| GPU: имя, VRAM занято/всего, утил % | `nvidia-smi --query-gpu=name,memory.total,memory.used,utilization.gpu --format=csv,noheader,nounits` (MiB→байты); fallback — amdgpu sysfs (`mem_info_vram_used/total`, `gpu_busy_percent`), имя карты — `lspci -mm` (поле 6), иначе `pci.ids` по `PCI_ID` из `uevent`, иначе `AMD GPU <id>` | `AGXAccelerator/PerformanceStatistics`: «Device Utilization %» + «In use system memory»; всего = лимит `iogpu.wired_limit_mb` (0/нет → ¾ RAM) | **ленивый отдельный зонд**, только при раскрытой GPU-панели карточки; по строке `HL_GPU=name|totalB|usedB|pct` на GPU |
 
 Ненулевой код выхода/таймаут ssh = неуспешный опрос; хост считает промахи → offline.
+GPU-зонд — вторая ssh-сессия; его сбой НЕ влияет на статус хоста (метрики просто не обновляются).
 
 ---
 
@@ -156,6 +159,13 @@ hosts:
 - **Сеть** — ↑/↓ + бейдж аплинка (100/1G/2.5G/10G…).
 - **Диск I/O** — R/W + бейдж типа диска (nvme/ssd/hdd).
 
+**GPU-панель (ленивая):** если на хосте обнаружен GPU (`HL_GPU=1`), в шапке справа от
+терминала появляется кнопка `cpu`; клик — карточка **плавно раскрывается вниз**: блок под
+метриками, по строке на GPU (мини-кольцо загрузки ядра % + сокращённое имя модели + полоса
+VRAM «занято / всего»), окраска по тем же порогам (6.3). GPU-метрики опрашиваются
+**только пока панель раскрыта** (дополнительный лёгкий ssh-зонд в каждом тике + мгновенный
+при раскрытии); закрытие панели останавливает опрос и сбрасывает кэш значений.
+
 ### 6.3 Пороговая окраска колец
 | Состояние | Диапазон | Цвет |
 |---|---|---|
@@ -172,7 +182,7 @@ hosts:
 ### 6.5 Взаимодействие с карточкой
 - **Правый клик** (context menu): назначить группу/тег, **создать новую** группу/тег (через алерт), **удалить хост** (подтверждение).
 - **Drag-and-drop** карточки на другую карточку — перенос в группу целевой.
-- **`›_`** — открыть `ssh <host>` в Terminal.app (`serveraliveinterval=30`).
+- **`›_`** — открыть `ssh <host>` в Terminal.app (`serveraliveinterval=30`). Требует разрешения macOS **«Конфиденциальность → Автоматизация → Terminal»**; в `Info.plist` приложения обязателен ключ `NSAppleEventsUsageDescription`, иначе TCC отказывает без диалога (`Refusing … without NSAppleEventsUsageDescription key`) и кнопка молча не работает.
 - **Консоль** (иконка терминала в шапке): журнал действий и ошибок — сбой SSH, переходы online/offline, события конфига, действия пользователя; автоскролл, фильтр «Все/Ошибки», очистка, счётчик новых ошибок.
 
 ### 6.6 Тема
@@ -214,7 +224,7 @@ hosts:
 
 ```sh
 swift build            # debug
-swift run Check        # 105 проверок, ALL TESTS PASSED
+swift run Check        # 210 проверок, ALL TESTS PASSED
 swift build -c release # релиз
 
 HOMELAB_CONFIG=/path/config.yaml .build/release/Dashboard
@@ -228,3 +238,25 @@ HOMELAB_CONFIG=/path/config.yaml .build/release/Dashboard
 - Интервал опроса и пороги правятся в YAML.
 - Температура и диск-I/O (W) на macOS — `N/A` (недоступны без root/powermetrics, который не используется).
 - Реальные адреса/имена хостов — только в gitignored `config.yaml`; в публичном репо — заглушки.
+
+---
+
+## 12. Критерии приёмки (UI/поведение)
+
+Каждый критерий проверяется на запущенном приложении с реальным конфигом; «тик» = один
+опрос (`poll_interval`, дефолт 5 с). Любой провал — блокер релиза, кроме помеченных
+«отложено».
+
+| # | Критерий | Как проверять | Статус |
+|---|---|---|---|
+| A1 | **Контекстное меню по правой кнопке не мигает на обновлении данных**: верхний уровень остаётся открытым ≥ 4 тиков | правый клик по карточке; опрашивать окна приложения с `kCGWindowLayer > 0` каждые 0.5 с в течение 20 с — провалов быть не должно | ✅ (после `HostCard: Equatable` + `store` не через `@EnvironmentObject`) |
+| A2 | **Подменю «Группа»/«Теги» не переоткрываются на обновлении данных** (успеть выбрать тег) | открыть меню → навести на «Теги»/«Группа» → держать 20 с: окно подменю не должно исчезать/менять id | ❌ **отложено** — подменю пересобираются на тиках; надёжное решение — свой `NSMenu` через `NSViewRepresentable` вместо SwiftUI `.contextMenu` |
+| A3 | **GPU-панель не меняет высоту карточки при обновлении**: нижняя граница карточки неизменна ≥ 4 тиков | открыть GPU-панель; 6 кадров по 2.5 с; нижняя граница карточки (пиксель цвета card-bg) — одно значение | ✅ |
+| A4 | GPU-опрос идёт **только** при раскрытой панели; закрытие сбрасывает кэш и останавливает опрос | `swift run Check` (`testGpu`: `probes == 0` при закрытой панели) | ✅ |
+| A5 | Пустой/сбойный ответ GPU-зонда **не обнуляет** показанные значения | `Check` (`testGpu`: пустой ответ сохраняет последние метрики) | ✅ |
+| A6 | Температура не показывает заглушку ACPI (`acpitz` = ровно 20 °C) как реальную; при отсутствии датчика платы — прочерк | хост с `acpitz=20000` при живом `k10temp` должен показывать CPU по `k10temp`, плату `—` | ✅ |
+| A7 | Метрики живые (интервальные), не средние с загрузки: CPU≠100 % на пустом хосте | `Check` (`testCpuTopParse`/`testMacCpuParse`) + сверка с `uptime` на хосте | ✅ |
+| A8 | AMD/Intel GPU на Linux показывают модель, а не `card0` | `Dashboard --gpucheck <ssh>` → имя из `lspci`/`pci.ids` | ✅ |
+| A9 | **Кнопка `›_` реально открывает Terminal и запускает в нём `ssh`** (при выданном разрешении «Автоматизация → Terminal») | нажать `›_`; через 3 с `pgrep -fl ssh \| grep ServerAliveInterval` — появилась интерактивная сессия (в отличие от опроса: без `BatchMode`); в `Info.plist` есть `NSAppleEventsUsageDescription`; в `log show --predicate 'eventMessage CONTAINS "kTCCServiceAppleEvents"'` нет `Refusing … without NSAppleEventsUsageDescription` | ✅ |
+
+Команда-эталон: `swift run Check` — 210 проверок, `ALL TESTS PASSED`.

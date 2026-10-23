@@ -41,13 +41,15 @@ jobs:
           	<key>CFBundlePackageType</key>
           	<string>APPL</string>
           	<key>CFBundleShortVersionString</key>
-          	<string>0.2.0</string>
+          	<string>0.3.0</string>
           	<key>CFBundleVersion</key>
           	<string>1</string>
           	<key>LSApplicationCategoryType</key>
           	<string>public.app-category.utilities</string>
           	<key>LSMinimumSystemVersion</key>
           	<string>13.0</string>
+          	<key>NSAppleEventsUsageDescription</key>
+          	<string>Кнопка «терминал» открывает Terminal и запускает в нём ssh к выбранному хосту.</string>
           	<key>NSHighResolutionCapable</key>
           	<true/>
           </dict>
